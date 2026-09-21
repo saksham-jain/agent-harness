@@ -1,0 +1,26 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    ports:
+      - "6333:6333"   # REST API + dashboard (http://localhost:6333/dashboard)
+    volumes:
+      - ./qdrant_storage:/qdrant/storage
+    restart: unless-stopped
+
+  rag:
+    build: .
+    depends_on:
+      - qdrant
+    profiles: ["rag"]            # not started by `up`; launched with `run`
+    stdin_open: true
+    tty: true
+    environment:
+      - LLM_BASE_URL=http://host.docker.internal:11434/v1   # native Ollama on your Mac
+      - QDRANT_URL=http://qdrant:6333
+      - LLM_MODEL=qwen2.5:7b
+      - EMBED_MODEL=nomic-embed-text
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${DOCS_DIR:-./docs}:/docs:ro   # your documents, mounted read-only
