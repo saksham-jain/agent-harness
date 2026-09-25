@@ -8,8 +8,47 @@ services:
       - ./qdrant_storage:/qdrant/storage
     restart: unless-stopped
 
+  mcp-server:
+    build: .
+    container_name: mcp-server
+    command: ["python", "mcp_server.py"]
+    environment:
+      - MCP_HOST=0.0.0.0        # 0.0.0.0 so other containers can reach it
+      - MCP_PORT=8000
+      - MCP_PATH=/mcp
+    ports:
+      - "8000:8000"   # exposed so the host (MCP Inspector, curl) can reach it too
+    healthcheck:
+      # TCP connect only: the server exposes no unauthenticated health route.
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), 3).close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  mcp-client:
+    build: .
+    container_name: mcp-client
+    command: ["python", "agent_harness_base.py"]
+    depends_on:
+      mcp-server:
+        condition: service_healthy
+    profiles: ["client"]         # interactive; launched with `run --rm`
+    stdin_open: true
+    tty: true
+    environment:
+      - LLM_BASE_URL=http://host.docker.internal:11434/v1   # native Ollama on your Mac
+      - LLM_MODEL=qwen2.5:7b
+      - MCP_SERVER_URL=http://mcp-server:8000/mcp
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${WORKDIR:-.:/work}       # the agent's working dir for bash/read_file/write_file
+
   rag:
     build: .
+    command: ["python", "rag_qdrant.py", "/docs"]
     depends_on:
       - qdrant
     profiles: ["rag"]            # not started by `up`; launched with `run`

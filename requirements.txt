@@ -1,3 +1,7 @@
 openai
 qdrant-client
 pypdf
+# v1 and v2 have incompatible APIs (FastMCP/ClientSession vs MCPServer/Client),
+# so pin the major line rather than resolving to whatever is newest.
+mcp[cli]>=2.2,<3
+numpy
