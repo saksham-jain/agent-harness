@@ -107,6 +107,11 @@ project — it is an external monitor pointed at port 8000.
   examples online are still v1.
 - **Raise `ToolError` for anything the model should read and retry.** Any other
   exception reaches it as a bare "Error executing tool X".
+- **Use the venv's python, not a bare `python3`.** The dependencies live in
+  `../.venv`. With no venv active, `python3 agent_harness_base.py` dies at the
+  `from openai import OpenAI` line with `ModuleNotFoundError` and prints nothing at all
+  — no banner, no error that looks like a banner. Run `../.venv/bin/python3
+  agent_harness_base.py`, or activate the venv first.
 - **Slow, by design of the model.** A single `answer_docs` call measures **~37s**: an
   embedding call, a Qdrant search, then a full `qwen2.5:7b` generation. A turn using
   three tools is a minute and a half. Budget per tool call, not per turn — the 7b model
@@ -114,17 +119,22 @@ project — it is an external monitor pointed at port 8000.
 
 ## Local, no Docker
 
+There is a venv at `../.venv`. Activate it, or call its interpreter directly:
+
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+cd .. && source .venv/bin/activate && cd agent_harness
 
 python3 mcp_server.py                                           # terminal 1
 MCP_SERVER_URL=http://localhost:8000/mcp \
   python3 agent_harness_base.py                                 # terminal 2
 ```
 
-macOS ships `python3`, not `python`. Everything defaults to Ollama on
-`localhost:11434` and Qdrant on `localhost:6333`, so the containers aren't needed.
+Or without activating, using `../.venv/bin/python3` for both. Everything else
+defaults to Ollama on `localhost:11434` and Qdrant on `localhost:6333`, so the
+containers aren't needed.
+
+Do **not** create a venv inside `agent_harness/` — it would shadow the working one
+and come up without the dependencies installed.
 
 Both the server and the client default to port `8000`, which `mcp-server` also holds.
 Either `docker compose stop mcp-server` first, or pick another port for both:
