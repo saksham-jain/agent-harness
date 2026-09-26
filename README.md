@@ -59,6 +59,28 @@ No threshold keeps all relevant hits and drops all irrelevant ones. `MIN_SCORE`
 (default `0.5`) only starts to work once the corpus is large and varied enough for
 similarity to spread out. Until then, the grounding prompt is the guardrail.
 
+## Prompting it
+
+The model is `qwen2.5:7b`, so it needs a nudge toward tools it doesn't know it has.
+Verified routing:
+
+| Prompt | Calls |
+| --- | --- |
+| *What did my interview notes say about salary?* | `answer_docs` |
+| *What is the square root of 144?* | `sqrt` |
+| *Echo the word "compose" back to me three times* | `echo` |
+| *Use the word_count tool on "the quick brown fox jumps"* | `word_count` |
+| *Use the now tool to get the current time in +05:30* | `now` |
+| *Who wrote the novel Dune?* | nothing, answers directly |
+
+Two behaviours worth knowing. The model **will not** reach for `now` on *"what time
+is it?"* — it guesses instead, so name the tool. And it **will** answer trivial
+arithmetic itself rather than call `add`, which is faster and fine.
+
+`answer_docs` is only chosen when the question signals private documents ("my
+notes", "my resume", "the lease"). *"How long is the hotel booked?"* routes straight
+to an answer, because nothing in the question says the hotel is in your corpus.
+
 ## Gotchas
 
 - **The MCP server must bind `0.0.0.0`.** `run()` defaults to `127.0.0.1`, unreachable

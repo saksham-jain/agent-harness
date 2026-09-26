@@ -35,7 +35,23 @@ MIN_SCORE = float(os.getenv("MIN_SCORE", "0.5"))
 TOP_K = int(os.getenv("TOP_K", "4"))
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "20"))
 
-SYSTEM = "You are a helpful coding agent working in the user's current directory. Use tools when needed."
+SYSTEM = """You are a helpful coding agent in the user's current directory.
+
+Route each question to the right tool:
+
+- answer_docs : ALWAYS use for questions about the user's own documents - their
+                notes, records, resumes, contracts, saved plans. Never answer
+                those from memory; they are not something you were trained on.
+- read_file   : files in the working directory
+- add         : arithmetic
+- no tool     : general knowledge you already have
+
+Examples:
+  "what did the lease say about termination?"  -> answer_docs
+  "what did the interview notes say?"          -> answer_docs
+  "what is in config.json?"                   -> read_file
+  "10 + 2"                                    -> add
+  "who wrote Dune?"                           -> no tool, just answer"""
 MAX_STEPS = 10
 _qdrant = None
 
@@ -71,9 +87,11 @@ LOCAL_NAMES = {t["function"]["name"] for t in LOCAL_TOOLS}
 # handed a tool that cannot work.
 DOCS_TOOL = tool(
     "answer_docs",
-    "Answer a question using the indexed document corpus. Returns a cited answer, or "
-    "says so plainly when the documents do not cover the question. Use this for anything "
-    "about the user's own files; do not guess from memory.",
+    "Answer a question about the user's OWN indexed documents: their notes, records, "
+    "resumes, contracts. Use ONLY when the question asks about that specific private "
+    "corpus. Do NOT use for arithmetic, general knowledge, or anything already on disk "
+    "— use add, or just answer directly. Returns a cited answer, or says plainly when "
+    "the documents do not cover the question.",
     ["query"],
 )
 
