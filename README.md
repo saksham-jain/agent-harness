@@ -78,10 +78,24 @@ similarity to spread out. Until then, the grounding prompt is the guardrail.
 ## Local, no Docker
 
 ```bash
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python mcp_server.py                                            # terminal 1
+
+python3 mcp_server.py                                           # terminal 1
 MCP_SERVER_URL=http://localhost:8000/mcp \
-  python agent_harness_base.py                                  # terminal 2
+  python3 agent_harness_base.py                                 # terminal 2
+```
+
+macOS ships `python3`, not `python`. Everything defaults to Ollama on
+`localhost:11434` and Qdrant on `localhost:6333`, so the containers aren't needed.
+
+Both the server and the client default to port `8000`, which `mcp-server` also holds.
+Either `docker compose stop mcp-server` first, or pick another port for both:
+
+```bash
+MCP_PORT=8100 python3 mcp_server.py                         # terminal 1
+MCP_SERVER_URL=http://localhost:8100/mcp \
+  python3 agent_harness_base.py                              # terminal 2
 ```
 
 `answer_docs` appears only if the collection exists, so index with `rag_qdrant.py`

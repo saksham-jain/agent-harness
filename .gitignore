@@ -1,2 +1,5 @@
 qdrant_storage
 __pycache__/
+.venv/
+venv/
+*.pyc
