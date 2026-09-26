@@ -81,6 +81,21 @@ arithmetic itself rather than call `add`, which is faster and fine.
 notes", "my resume", "the lease"). *"How long is the hotel booked?"* routes straight
 to an answer, because nothing in the question says the hotel is in your corpus.
 
+## Logs
+
+`docker compose logs -f mcp-server` shows every tool call with its arguments, result
+and duration, which uvicorn's access log alone cannot tell you:
+
+```
+INFO    mcp.tools: add(a=41, b=1) -> 42 in 0ms
+INFO    mcp.tools: now(tz='+05:30') -> '2026-09-27T01:37:39+05:30' in 0ms
+WARNING mcp.tools: sqrt(x=-9.0) failed after 0ms: Cannot take the square root of a negative number
+```
+
+Set `MCP_LOG_LEVEL=DEBUG` for more. If something on your host is polling
+`GET /health` every few minutes and filling the log with 404s, that is not this
+project — it is an external monitor pointed at port 8000.
+
 ## Gotchas
 
 - **The MCP server must bind `0.0.0.0`.** `run()` defaults to `127.0.0.1`, unreachable
