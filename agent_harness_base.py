@@ -8,6 +8,7 @@ agent can call either without knowing the difference.
 import asyncio
 import json
 import os
+import re
 import subprocess
 import threading
 
@@ -19,11 +20,32 @@ client = OpenAI(
 )
 MODEL = os.getenv("LLM_MODEL", "qwen2.5:7b")
 MCP_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8000/mcp")
+
+# Static document search, straight against Qdrant. Deliberately not an MCP
+# server: this is the agent's own capability, not a tool it discovers.
+EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
+QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+COLLECTION = "rag_" + re.sub(r"[^a-zA-Z0-9]+", "_", EMBED_MODEL)  # must match rag_qdrant.py
+SEARCH_PREFIX = "search_query: "  # nomic-embed-text requires the task prefix
+MIN_SCORE = float(os.getenv("MIN_SCORE", "0.5"))
+# Measured on this 6-chunk corpus, relevant and irrelevant top-1 scores overlap
+# (0.74/0.76 relevant vs 0.52-0.62 irrelevant), so no threshold here separates them.
+# The grounding prompt in answer_docs() is the real guardrail; this only helps once
+# the corpus is large and varied enough for similarity to spread out. Tune per model.
+TOP_K = int(os.getenv("TOP_K", "4"))
+MAX_HISTORY = int(os.getenv("MAX_HISTORY", "20"))
+
 SYSTEM = "You are a helpful coding agent working in the user's current directory. Use tools when needed."
 MAX_STEPS = 10
+_qdrant = None
 
 
-def tool(name, desc, props):
+def tool(name, desc, props, optional=None):
+    """OpenAI tool schema. `props` are required string args; `optional` maps
+    name -> JSON schema for optional args."""
+    properties = {k: {"type": "string"} for k in props}
+    for k, schema in (optional or {}).items():
+        properties[k] = schema
     return {
         "type": "function",
         "function": {
@@ -31,8 +53,8 @@ def tool(name, desc, props):
             "description": desc,
             "parameters": {
                 "type": "object",
-                "properties": {k: {"type": "string"} for k in props},
-                "required": props,
+                "properties": properties,
+                "required": list(props),
             },
         },
     }
@@ -44,6 +66,19 @@ LOCAL_TOOLS = [
     tool("write_file", "Write text to a file, overwriting it.", ["path", "content"]),
 ]
 LOCAL_NAMES = {t["function"]["name"] for t in LOCAL_TOOLS}
+
+# Only added to the model's tool list when the corpus is actually there, so it is never
+# handed a tool that cannot work.
+DOCS_TOOL = tool(
+    "answer_docs",
+    "Answer a question using the indexed document corpus. Returns a cited answer, or "
+    "says so plainly when the documents do not cover the question. Use this for anything "
+    "about the user's own files; do not guess from memory.",
+    ["query"],
+)
+
+# Everything the harness dispatches itself. Anything outside this set goes to MCP.
+LOCAL_NAMES |= {DOCS_TOOL["function"]["name"]}
 
 
 class McpBridge:
@@ -118,8 +153,85 @@ def _result_to_text(result):
     return text
 
 
+def get_qdrant():
+    """Lazily connect, so the agent still starts when Qdrant is down."""
+    global _qdrant
+    if _qdrant is None:
+        from qdrant_client import QdrantClient
+
+        _qdrant = QdrantClient(url=QDRANT_URL, timeout=15)
+    return _qdrant
+
+
+def docs_available():
+    """True when Qdrant is reachable and the collection has been built."""
+    try:
+        return get_qdrant().collection_exists(COLLECTION)
+    except Exception:
+        return False
+
+
+def retrieve(query, k=TOP_K):
+    """Embed the query and return the chunks that clear MIN_SCORE."""
+    emb = client.embeddings.create(model=EMBED_MODEL, input=[SEARCH_PREFIX + query])
+    points = (
+        get_qdrant()
+        .query_points(COLLECTION, query=emb.data[0].embedding, limit=k, with_payload=True)
+        .points
+    )
+    return [p for p in points if p.score >= MIN_SCORE]
+
+
+def answer_docs(query):
+    """Ground an answer in the indexed documents, or admit nothing was found.
+
+    Generation is deliberately kept inside this tool: the agent receives a finished,
+    cited answer rather than raw chunks, so it cannot blend irrelevant passages into
+    a confident-sounding reply.
+    """
+    try:
+        hits = retrieve(query)
+    except Exception as e:
+        return f"Document search unavailable: {e}"
+
+    if not hits:
+        return (
+            f"No document matched {query!r} above the relevance threshold "
+            f"(MIN_SCORE={MIN_SCORE}). Either the corpus does not cover it, or the "
+            "threshold is too high for this embedding model."
+        )
+
+    context = "\n\n".join(
+        f"[{i + 1}] ({h.payload['file']})\n{h.payload['text']}" for i, h in enumerate(hits)
+    )
+    messages = [
+        {
+            "role": "system",
+            "content": "Answer using ONLY the context below. Cite sources like [1]. "
+            "If the context doesn't contain the answer, say you don't know.",
+        },
+        {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {query}"},
+    ]
+    resp = client.chat.completions.create(model=MODEL, messages=messages)
+    sources = "\n".join(f"  [{i + 1}] {h.payload['file']} (score {h.score:.2f})" for i, h in enumerate(hits))
+    return f"{resp.choices[0].message.content}\n\nSources:\n{sources}"
+
+
+def trim_history(messages, limit=MAX_HISTORY):
+    """Keep the conversation bounded; drop oldest turns, never orphan a tool result."""
+    if len(messages) <= limit:
+        return messages
+    start = len(messages) - limit
+    while start < len(messages) and messages[start].get("role") == "tool":
+        start += 1  # a tool result without its assistant call breaks the API contract
+    return messages[:1] + messages[start:]
+
+
 def run_local_tool(name, args):
     try:
+        if name == "answer_docs":
+            print(f"\n? {args['query']}")
+            return answer_docs(args["query"])
         if name == "bash":
             print(f"\n$ {args['command']}")
             if input("run? [y/N] ").strip().lower() != "y":
@@ -202,13 +314,20 @@ def run_turn(messages, tools, bridge):
 
 def main():
     bridge, mcp_tools = connect_mcp()
-    tools = LOCAL_TOOLS + mcp_tools
+    tools = list(LOCAL_TOOLS)
+
+    if docs_available():
+        tools.append(DOCS_TOOL)
+    else:
+        print(f"  no document corpus: {COLLECTION} not found at {QDRANT_URL}")
+        print("  index it first:  docker compose --profile rag run --rm rag")
 
     messages = [{"role": "system", "content": SYSTEM}]
     print(f"Agent ready ({MODEL}).")
     if mcp_tools:
         names = ", ".join(t["function"]["name"] for t in mcp_tools)
         print(f"MCP tools from {MCP_URL}: {names}")
+    print(f"Local tools: {', '.join(t['function']['name'] for t in tools)}")
     print("Ctrl+C to quit.")
     while True:
         try:
@@ -217,6 +336,7 @@ def main():
             break
         messages.append({"role": "user", "content": user})
         run_turn(messages, tools, bridge)
+        messages[:] = trim_history(messages)  # bound context growth across turns
 
 
 if __name__ == "__main__":

@@ -34,6 +34,8 @@ services:
     depends_on:
       mcp-server:
         condition: service_healthy
+      qdrant:
+        condition: service_started
     profiles: ["client"]         # interactive; launched with `run --rm`
     stdin_open: true
     tty: true
@@ -41,6 +43,9 @@ services:
       - LLM_BASE_URL=http://host.docker.internal:11434/v1   # native Ollama on your Mac
       - LLM_MODEL=qwen2.5:7b
       - MCP_SERVER_URL=http://mcp-server:8000/mcp
+      - QDRANT_URL=http://qdrant:6333
+      - EMBED_MODEL=nomic-embed-text
+      - MIN_SCORE=0.5             # relevance floor; tune per embedding model
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

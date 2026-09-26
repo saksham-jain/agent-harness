@@ -1,74 +1,88 @@
 # agent-harness
 
-Local-first agent + RAG stack. Ollama for inference, Qdrant for vectors, MCP for tool
-serving, all wired together with Docker Compose.
+One agent with two halves: it can act on your files, and it can answer from your
+document corpus. Ollama for inference, Qdrant for vectors, MCP for tools, Docker
+Compose to run it.
 
-## Layout
+## Files
 
 | File | Role |
 | --- | --- |
-| `mcp_server.py` | MCP server exposing demo tools over Streamable HTTP |
-| `agent_harness_base.py` | Coding agent. Local tools + tools discovered from the MCP server |
-| `rag_qdrant.py` | RAG over Qdrant (chunk, embed, retrieve, answer with citations) |
-| `rag.py` | Older numpy-only RAG, kept for comparison. Needs `numpy` |
+| `agent_harness_base.py` | The agent. Local tools + `answer_docs` + tools discovered over MCP |
+| `mcp_server.py` | MCP server exposing tools over Streamable HTTP |
+| `rag_qdrant.py` | Indexes `docs/` into Qdrant. Run once, then it's a store |
+| `rag.py` | Older numpy-only RAG, kept for reference |
 
-## Running
+## Run
 
 ```bash
-docker compose up -d                      # qdrant + mcp-server
-docker compose --profile client run --rm mcp-client    # the agent
-docker compose --profile rag run --rm rag              # the RAG REPL
+docker compose up -d                                     # qdrant + mcp-server
+docker compose --profile rag run --rm rag                # index docs (once)
+docker compose --profile client run --rm mcp-client      # the agent
 ```
 
-Ollama runs natively on the host and the containers reach it via
-`host.docker.internal:11434`. If you change the port the MCP server binds, update
-`MCP_SERVER_URL` on the `mcp-client` service to match.
+Override with `DOCS_DIR` (default `./docs`) and `WORKDIR` (default `.`).
 
-Environment overrides: `DOCS_DIR` (default `./docs`) and `WORKDIR` (default `.`).
-
-## How the MCP pieces connect
+## How it fits together
 
 ```
-mcp-client ──HTTP──> mcp-server:8000/mcp        (Streamable HTTP, compose network)
-       │
-       └──HTTP──> host.docker.internal:11434    (Ollama: chat + tool calling)
+                     ┌──────────────────────────┐
+  mcp-client ──MCP──>│  mcp-server              │  add, echo, now, sqrt, word_count
+         ──local────>│  bash, read_file,        │
+         ──local────>│       write_file         │
+         ──local────>│  answer_docs ──> Qdrant  │  static doc search
+                     └──────────────────────────┘
+                                └──> Ollama (embed + generate)
 ```
 
-`agent_harness_base.py` connects to the MCP server at startup, calls `list_tools()`, and
-converts each tool's `input_schema` into an OpenAI tool schema. The model then sees one
-flat tool list; when it calls something, the harness routes it to the local dispatcher or
-back over MCP. Tool calls are traced in the output as `[tool:local]` or `[tool:mcp]`.
+`answer_docs` deliberately talks to Qdrant **directly** rather than over MCP. The
+MCP server stays a general tools server; retrieval is the agent's own capability.
 
-The REPL is synchronous but MCP is async, so `McpBridge` holds one connection open on a
-background event loop rather than reconnecting on every call. If the server is
-unreachable the agent logs it and continues with local tools only.
+## Why answer_docs and not search_docs
 
-Inspect the server from your machine with the
-[MCP Inspector](https://github.com/modelcontextprotocol/inspector) against
-`http://localhost:8000/mcp`.
+`search_docs` would hand raw chunks to the model and let it write the answer. That
+moves the grounding rules out of a prompt and into a 7B model's judgement, which is
+where they get lost. `answer_docs` keeps generation inside the tool, where the
+grounding prompt and the "say you don't know" rule still apply.
+
+A score threshold does **not** protect you. Measured on this corpus, relevant and
+irrelevant top-1 scores overlap:
+
+| Query | top-1 |
+| --- | --- |
+| *How long is the hotel booked?* (in corpus) | 0.763 |
+| *What is on the resume?* (in corpus) | 0.590 |
+| *Capital of France?* (not in corpus) | 0.600 |
+| *Stock price of Apple?* (not in corpus) | 0.623 |
+
+No threshold keeps all relevant hits and drops all irrelevant ones. `MIN_SCORE`
+(default `0.5`) only starts to work once the corpus is large and varied enough for
+similarity to spread out. Until then, the grounding prompt is the guardrail.
 
 ## Gotchas
 
-- **The server must bind `0.0.0.0`.** `MCPServer.run()` defaults to `127.0.0.1`, which is
-  unreachable from other containers. `docker-compose.yml` sets `MCP_HOST=0.0.0.0`.
-- **Rebuild after changing the Dockerfile.** Compose keeps a separate image per service,
-  so a stale `agent_harness-rag` can still carry an old `ENTRYPOINT` that swallows the
-  `command:` override. `docker compose build --no-cache` if a service behaves as if it
-  ignored your changes.
-- **`mcp` is pinned to `>=2.2,<3`.** v1 and v2 have incompatible APIs: `FastMCP` /
-  `ClientSession` became `MCPServer` / `Client`, and transport options moved from the
-  constructor to `run()`. Most examples online are still v1.
-- **Server-side errors:** raise `ToolError` when the model should read the reason and
-  retry. Any other exception reaches it as a bare "Error executing tool X" with the
-  traceback in the server log.
-- **DNS-rebinding protection is off by default**, so container hostnames are accepted. Turn
-  it on with `TransportSecuritySettings(allowed_hosts=[...])` before exposing the port
-  anywhere real.
+- **The MCP server must bind `0.0.0.0`.** `run()` defaults to `127.0.0.1`, unreachable
+  from other containers.
+- **Rebuild after changing the Dockerfile.** Compose keeps a per-service image, so a
+  stale one can carry an old `ENTRYPOINT` that swallows your `command:` override.
+- **`mcp` is pinned `>=2.2,<3`.** v1 and v2 APIs are incompatible (`FastMCP` →
+  `MCPServer`, `ClientSession` → `Client`, transport options moved to `run()`). Most
+  examples online are still v1.
+- **Raise `ToolError` for anything the model should read and retry.** Any other
+  exception reaches it as a bare "Error executing tool X".
+- **Slow, by design of the model.** A single `answer_docs` call measures **~37s**: an
+  embedding call, a Qdrant search, then a full `qwen2.5:7b` generation. A turn using
+  three tools is a minute and a half. Budget per tool call, not per turn — the 7b model
+  is CPU-bound on Ollama.
 
-## Local (no Docker)
+## Local, no Docker
 
 ```bash
 pip install -r requirements.txt
-python mcp_server.py                                    # terminal 1
-MCP_SERVER_URL=http://localhost:8000/mcp python agent_harness_base.py   # terminal 2
+python mcp_server.py                                            # terminal 1
+MCP_SERVER_URL=http://localhost:8000/mcp \
+  python agent_harness_base.py                                  # terminal 2
 ```
+
+`answer_docs` appears only if the collection exists, so index with `rag_qdrant.py`
+first or the tool is silently omitted.
