@@ -1,26 +1,31 @@
 #!/usr/bin/env python3
-"""Basic MCP server exposing a few demo tools over Streamable HTTP.
+"""MCP Server: serves the document tools over Streamable HTTP.
+
+This layer owns protocol concerns only. What a tool actually does lives in
+`rag_service`, so retrieval logic is testable without a client and reusable by
+anything that can speak MCP.
 
 Run:  python mcp_server.py
 Serves: http://<MCP_HOST>:<MCP_PORT><MCP_PATH>   (0.0.0.0:8000/mcp in Docker)
 
-Clients connect with a plain URL:
-    Client("http://localhost:8000/mcp")
+Clients connect with a plain URL:  Client("http://localhost:8000/mcp")
 """
 import functools
 import logging
 import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel
 
+import rag_service
+
 HOST = os.getenv("MCP_HOST", "127.0.0.1")
 PORT = int(os.getenv("MCP_PORT", "8000"))
 PATH = os.getenv("MCP_PATH", "/mcp")
-SERVER_NAME = "agent-harness-demo"
+SERVER_NAME = "agent-harness-docs"
 
 logging.basicConfig(
     level=os.getenv("MCP_LOG_LEVEL", "INFO").upper(),
@@ -58,74 +63,64 @@ def logged(fn):
 mcp = MCPServer(
     SERVER_NAME,
     instructions=(
-        "Demo tool server for the agent-harness stack: arithmetic, text utilities, and the "
-        "clock. Use these to sanity-check that the MCP wiring between client and server works."
+        "Tools over the user's indexed document corpus: answer questions from it with "
+        "citations, see what is in it, and refresh it after files change. Use these for "
+        "anything about the user's own documents."
     ),
 )
 
 
-def _parse_tz(tz: str) -> timezone:
-    """Accept 'UTC', 'Z', or a fixed offset like '+05:30' / '-08:00'."""
-    if tz.upper() in ("UTC", "Z"):
-        return timezone.utc
-    try:
-        sign = -1 if tz[0] == "-" else 1
-        hours, minutes = tz[1:].split(":")
-        return timezone(sign * timedelta(hours=int(hours), minutes=int(minutes)))
-    except Exception:
-        raise ToolError(f"Unrecognised timezone {tz!r}. Use 'UTC' or a fixed offset like '+05:30'.")
+class DocInfo(BaseModel):
+    file: str
+    chunks: int
 
 
-@mcp.tool(title="Add two integers")
+@mcp.tool(title="Answer from the documents")
 @logged
-def add(a: int, b: int) -> int:
-    """Add two integers and return the sum."""
-    return a + b
+def answer_docs(query: str) -> str:
+    """Answer a question using the indexed documents. Returns a cited answer, or says
+    plainly that the documents do not cover it. Use this for anything about the user's
+    own files rather than guessing."""
+    return rag_service.answer(query)
 
 
-@mcp.tool(title="Echo text back")
+@mcp.tool(title="List indexed documents")
 @logged
-def echo(text: str, times: int = 1) -> str:
-    """Echo `text` back, repeated `times` times and space-separated."""
-    if times < 1:
-        raise ToolError("times must be >= 1")
-    return " ".join([text] * times)
+def list_docs() -> list[DocInfo]:
+    """List the documents currently in the index, with how many chunks each has."""
+    if not rag_service.available():
+        raise ToolError(f"No index found (collection {rag_service.COLLECTION!r}). Run the indexer first.")
+    return [DocInfo(file=path, chunks=n) for path, n in rag_service.list_docs().items()]
 
 
-class Counts(BaseModel):
-    words: int
-    characters: int
-
-
-@mcp.tool(title="Count words")
+@mcp.tool(title="Re-index the documents")
 @logged
-def word_count(text: str) -> Counts:
-    """Count the words and characters in `text`."""
-    return Counts(words=len(text.split()), characters=len(text))
+def refresh_index() -> str:
+    """Re-scan the document directory and embed anything that changed. Call after
+    creating or editing files that should become searchable."""
+    return rag_service.index()
 
 
-@mcp.tool(title="Square root")
+@mcp.tool(title="Index status")
 @logged
-def sqrt(x: float) -> float:
-    """Return the square root of a non-negative number."""
-    if x < 0:
-        # ToolError messages reach the model, so it can read the reason and retry.
-        # Any other exception would surface as a bare "Error executing tool sqrt".
-        raise ToolError(f"Cannot take the square root of a negative number: {x}")
-    return x**0.5
+def index_status() -> str:
+    """Whether a document index exists, plus where it is looking."""
+    ready = rag_service.available()
+    return (
+        f"ready: collection={rag_service.COLLECTION!r} at {rag_service.QDRANT_URL} "
+        f"({rag_service.EMBED_MODEL}), docs dir={rag_service.DOCS_DIR!r}"
+        if ready
+        else f"not indexed: no collection {rag_service.COLLECTION!r} at {rag_service.QDRANT_URL}. "
+        "Run the indexer, then call refresh_index()."
+    )
 
 
-@mcp.tool(title="Current time")
+@mcp.resource("docs://status")
 @logged
-def now(tz: str = "UTC") -> str:
-    """Return the current time. `tz` is 'UTC' or a fixed offset such as '+05:30'."""
-    return datetime.now(_parse_tz(tz)).isoformat(timespec="seconds")
-
-
-@mcp.resource("demo://status")
 def status() -> str:
-    """A one-line health string for the demo server."""
-    return f"{SERVER_NAME} ok at {datetime.now(timezone.utc).isoformat(timespec='seconds')}"
+    """A one-line health string for the document service."""
+    state = "ready" if rag_service.available() else "not indexed"
+    return f"{SERVER_NAME} {state} at {datetime.now(timezone.utc).isoformat(timespec='seconds')}"
 
 
 if __name__ == "__main__":

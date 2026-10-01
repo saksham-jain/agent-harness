@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Shared document handling for the RAG scripts.
+"""Shared document handling for the RAG layer.
 
-`rag.py` (numpy) and `rag_qdrant.py` (Qdrant) index the same corpus with the same
-embedding model, so they share the parts that must agree: which files are picked up,
-how they are split, and how they are embedded. Anything that differs between them
-belongs in the script, not here.
+Used by `rag_service` for both indexing and querying, so the two can never disagree
+about which files are picked up, how they are split, or how they are embedded. The
+MCP layer above knows nothing about any of this.
 """
 import os
 

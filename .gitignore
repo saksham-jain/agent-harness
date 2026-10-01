@@ -3,4 +3,4 @@ __pycache__/
 .venv/
 venv/
 *.pyc
-.rag_index.json
+.DS_Store
