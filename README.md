@@ -38,17 +38,42 @@ Override with `DOCS_DIR` (default `./docs`) and `WORKDIR` (default `.`).
 ## How it fits together
 
 ```
-                     ┌──────────────────────────┐
-  mcp-client ──MCP──>│  mcp-server              │  add, echo, now, sqrt, word_count
-         ──local────>│  bash, read_file,        │
-         ──local────>│       write_file         │
-         ──local────>│  answer_docs ──> Qdrant  │  static doc search
-                     └──────────────────────────┘
-                                └──> Ollama (embed + generate)
+   docker compose                              host (macOS)
+ ┌────────────────────┐
+ │  mcp-client        │
+ │  (the agent)       │
+ │                    │
+ │  bash / read_file  │
+ │  write_file        │
+ │  answer_docs       │
+ │  + 5 tools from ───┼──MCP───>  mcp-server :8000
+ │    mcp-server      │            stateless, always up
+ └─┬──────────────┬───┘
+   │              │
+   │ qdrant       │ OpenAI API
+   │ client       │
+   ▼              ▼
+ qdrant :6333   Ollama :11434
+ rag_nomic_     qwen2.5:7b
+ embed_text     nomic-embed-text
 ```
 
-`answer_docs` deliberately talks to Qdrant **directly** rather than over MCP. The
-MCP server stays a general tools server; retrieval is the agent's own capability.
+Three connections leave the agent, and only two of them are compose services:
+
+| From | Via | To | Used for |
+| --- | --- | --- | --- |
+| `mcp-client` | MCP `/mcp` | `mcp-server:8000` | `add`, `echo`, `now`, `sqrt`, `word_count` |
+| `mcp-client` | qdrant-client | `qdrant:6333` | `answer_docs` → vector search |
+| `mcp-client` | OpenAI API | `host.docker.internal:11434` | chat, tool calling, embeddings |
+| `rag` (one-shot) | qdrant-client | `qdrant:6333` | builds the index |
+
+- **Ollama is not a compose service.** Metal acceleration only works if it runs on the
+  Mac, so the containers reach it over `host.docker.internal`.
+- **`answer_docs` talks to Qdrant directly**, not over MCP. The MCP server stays a
+  general tools server; retrieval is the agent's own capability.
+
+Run without Docker and the same picture holds minus the boxes: Ollama and Qdrant on
+their default ports, `mcp_server.py` and the agent as two local processes.
 
 ## Why answer_docs and not search_docs
 
