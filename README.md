@@ -4,6 +4,18 @@ One agent with two halves: it can act on your files, and it can answer from your
 document corpus. Ollama for inference, Qdrant for vectors, MCP for tools, Docker
 Compose to run it.
 
+## What's used
+
+| | |
+| --- | --- |
+| LLM | `qwen2.5:7b` (7.6B, Q4_K_M) via Ollama |
+| Embeddings | `nomic-embed-text` (137M, nomic-bert, 768-dim) |
+| Vector DB | Qdrant `1.19.1`, 768-dim Cosine, collection `rag_nomic_embed_text` |
+| Tool protocol | MCP Python SDK `2.2.0`, Streamable HTTP |
+| Clients | `openai` `3.16.2` (Ollama's OpenAI-compatible API), `qdrant-client` `1.19.1` |
+| Runtime | Python 3.11 (`python:3.11-slim`), Docker Compose |
+| Retrieval | 800-char chunks, 100 overlap, top-4 |
+
 ## Files
 
 | File | Role |
@@ -58,6 +70,20 @@ irrelevant top-1 scores overlap:
 No threshold keeps all relevant hits and drops all irrelevant ones. `MIN_SCORE`
 (default `0.5`) only starts to work once the corpus is large and varied enough for
 similarity to spread out. Until then, the grounding prompt is the guardrail.
+
+## Slash commands
+
+Three shortcuts run before the model sees anything, so a tool always executes exactly
+as asked:
+
+```
+> /tools
+> /call word_count {"text": "haha how are you?"}
+> /help
+```
+
+Useful when the model decides a task is too simple to need a tool — it got *"haha how
+are you?"* wrong as **5 words** when `word_count` returned **4**.
 
 ## Prompting it
 
@@ -133,8 +159,8 @@ Or without activating, using `../.venv/bin/python3` for both. Everything else
 defaults to Ollama on `localhost:11434` and Qdrant on `localhost:6333`, so the
 containers aren't needed.
 
-Do **not** create a venv inside `agent_harness/` — it would shadow the working one
-and come up without the dependencies installed.
+Do **not** create a venv inside `agent_harness/` — it shadows the working one at
+`../.venv` and is a trap for anything that auto-detects `.venv` in the project root.
 
 Both the server and the client default to port `8000`, which `mcp-server` also holds.
 Either `docker compose stop mcp-server` first, or pick another port for both:

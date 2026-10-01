@@ -330,9 +330,52 @@ def run_turn(messages, tools, bridge):
     print("\n[stopped: hit MAX_STEPS]")
 
 
+def handle_command(line, tools, bridge):
+    """Run a slash command. Returns text to print, or None if it isn't one.
+
+    These bypass the model entirely, so a tool always runs exactly as asked instead
+    of the model deciding the task is too simple to need it.
+    """
+    cmd, _, rest = line.strip().partition(" ")
+    cmd = cmd.lower()
+
+    if cmd in ("/help", "/?"):
+        return (
+            "/tools                 list every tool the agent has\n"
+            "/call <tool> <json>    call a tool directly, no model involved\n"
+            "                        e.g. /call word_count {\"text\": \"haha how are you?\"}\n"
+            "anything else          goes to the model"
+        )
+
+    if cmd == "/tools":
+        lines = []
+        for t in tools:
+            f = t["function"]
+            params = f["parameters"].get("properties", {})
+            sig = ", ".join(f"{k}:{v.get('type','?')}" for k, v in params.items())
+            lines.append(f"  {f['name']:<12} ({sig})")
+        return "\n".join(lines)
+
+    if cmd == "/call":
+        name, _, raw = rest.partition(" ")
+        try:
+            args = json.loads(raw or "{}")
+        except json.JSONDecodeError as e:
+            return f"Bad JSON arguments: {e}"
+        if not any(t["function"]["name"] == name for t in tools):
+            return f"No such tool: {name}. Try /tools"
+        if name in LOCAL_NAMES:
+            return str(run_local_tool(name, args))
+        if bridge is None:
+            return f"{name} is an MCP tool but the server is not connected."
+        return _result_to_text(bridge.call(name, args))
+
+    return None
+
+
 def main():
     bridge, mcp_tools = connect_mcp()
-    tools = list(LOCAL_TOOLS)
+    tools = list(LOCAL_TOOLS) + mcp_tools
 
     if docs_available():
         tools.append(DOCS_TOOL)
@@ -346,12 +389,16 @@ def main():
         names = ", ".join(t["function"]["name"] for t in mcp_tools)
         print(f"MCP tools from {MCP_URL}: {names}")
     print(f"Local tools: {', '.join(t['function']['name'] for t in tools)}")
-    print("Ctrl+C to quit.")
+    print("Slash commands: /tools, /call <tool> <json>, /help   (Ctrl+C to quit)")
     while True:
         try:
             user = input("\n> ")
         except (KeyboardInterrupt, EOFError):
             break
+        reply = handle_command(user, tools, bridge) if user.startswith("/") else None
+        if reply is not None:
+            print(f"\n{reply}")
+            continue
         messages.append({"role": "user", "content": user})
         run_turn(messages, tools, bridge)
         messages[:] = trim_history(messages)  # bound context growth across turns
