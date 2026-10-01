@@ -11,6 +11,8 @@ import sys
 import numpy as np
 from openai import OpenAI
 
+from corpus import TOP_K, chunk, embed, list_files, read_file
+
 client = OpenAI(
     base_url=os.getenv("LLM_BASE_URL", "http://localhost:11434/v1"),
     api_key=os.getenv("LLM_API_KEY", "ollama"),
@@ -19,27 +21,6 @@ CHAT_MODEL = os.getenv("LLM_MODEL", "qwen2.5:7b")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
 DOCS_DIR = sys.argv[1] if len(sys.argv) > 1 else "docs"
 INDEX_FILE = ".rag_index.json"
-CHUNK_CHARS, OVERLAP, TOP_K, BATCH = 800, 100, 4, 32
-EXTS = {".txt", ".md", ".py", ".js", ".ts", ".json", ".csv", ".pdf"}
-
-
-def read_file(path):
-    if path.lower().endswith(".pdf"):
-        from pypdf import PdfReader  # pip install pypdf
-
-        return "\n".join(p.extract_text() or "" for p in PdfReader(path).pages)
-    with open(path, errors="ignore") as f:
-        return f.read()
-
-
-def list_files():
-    files = []
-    for root, dirs, names in os.walk(DOCS_DIR):
-        dirs[:] = [d for d in dirs if not d.startswith(".") and d != "node_modules"]
-        for n in names:
-            if os.path.splitext(n)[1].lower() in EXTS:
-                files.append(os.path.join(root, n))
-    return sorted(files)
 
 
 def signature(files):
@@ -47,23 +28,8 @@ def signature(files):
     return hashlib.sha256("|".join(parts).encode()).hexdigest()
 
 
-def chunk(text):
-    step = CHUNK_CHARS - OVERLAP
-    return [text[i : i + CHUNK_CHARS] for i in range(0, len(text), step) if text[i : i + CHUNK_CHARS].strip()]
-
-
-def embed(texts, prefix):
-    out = []
-    for i in range(0, len(texts), BATCH):
-        batch = [prefix + t for t in texts[i : i + BATCH]]
-        resp = client.embeddings.create(model=EMBED_MODEL, input=batch)
-        out.extend(d.embedding for d in resp.data)
-        print(f"  embedded {min(i + BATCH, len(texts))}/{len(texts)}", end="\r")
-    return out
-
-
 def build_index():
-    files = list_files()
+    files = list_files(DOCS_DIR)
     if not files:
         sys.exit(f"No supported files found in {DOCS_DIR!r}")
     sig = signature(files)
@@ -82,7 +48,7 @@ def build_index():
                 chunks.append({"file": path, "text": c})
         except Exception as e:
             print(f"  skipped {path}: {e}")
-    vecs = embed([c["text"] for c in chunks], "search_document: ")
+    vecs = embed(client, EMBED_MODEL, [c["text"] for c in chunks], "search_document: ", progress=True)
     for c, v in zip(chunks, vecs):
         c["emb"] = v
     with open(INDEX_FILE, "w") as f:
@@ -92,7 +58,7 @@ def build_index():
 
 
 def retrieve(query, chunks, matrix):
-    q = np.array(embed([query], "search_query: ")[0])
+    q = np.array(embed(client, EMBED_MODEL, [query], "search_query: ")[0])
     q /= np.linalg.norm(q)
     scores = matrix @ q
     top = np.argsort(scores)[::-1][:TOP_K]

@@ -8,7 +8,7 @@ WORKDIR /work
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY mcp_server.py agent_harness_base.py rag_qdrant.py ./
+COPY corpus.py mcp_server.py agent_harness_base.py rag_qdrant.py ./
 
 # No ENTRYPOINT on purpose: compose overrides the command per service.
 CMD ["python", "mcp_server.py"]

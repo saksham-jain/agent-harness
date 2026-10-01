@@ -23,6 +23,7 @@ Compose to run it.
 | `agent_harness_base.py` | The agent. Local tools + `answer_docs` + tools discovered over MCP |
 | `mcp_server.py` | MCP server exposing tools over Streamable HTTP |
 | `rag_qdrant.py` | Indexes `docs/` into Qdrant. Run once, then it's a store |
+| `corpus.py` | Shared file discovery, chunking and embedding used by both RAG scripts |
 | `rag.py` | Older numpy-only RAG, kept for reference |
 
 ## Run

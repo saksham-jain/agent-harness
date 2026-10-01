@@ -13,51 +13,17 @@ import uuid
 from openai import OpenAI
 from qdrant_client import QdrantClient, models
 
+from corpus import TOP_K, chunk, embed, list_files, read_file
+
 OLLAMA_URL = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 CHAT_MODEL = os.getenv("LLM_MODEL", "qwen2.5:7b")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
 DOCS_DIR = sys.argv[1] if len(sys.argv) > 1 else "docs"
 COLLECTION = "rag_" + re.sub(r"[^a-zA-Z0-9]+", "_", EMBED_MODEL)  # one collection per embed model
-CHUNK_CHARS, OVERLAP, TOP_K, BATCH = 800, 100, 4, 32
-EXTS = {".txt", ".md", ".py", ".js", ".ts", ".json", ".csv", ".pdf"}
 
 llm = OpenAI(base_url=OLLAMA_URL, api_key=os.getenv("LLM_API_KEY", "ollama"))
 qdrant = QdrantClient(url=QDRANT_URL)
-
-
-def read_file(path):
-    if path.lower().endswith(".pdf"):
-        from pypdf import PdfReader
-
-        return "\n".join(p.extract_text() or "" for p in PdfReader(path).pages)
-    with open(path, errors="ignore") as f:
-        return f.read()
-
-
-def list_files():
-    files = []
-    for root, dirs, names in os.walk(DOCS_DIR):
-        dirs[:] = [d for d in dirs if not d.startswith(".") and d != "node_modules"]
-        for n in names:
-            if os.path.splitext(n)[1].lower() in EXTS:
-                files.append(os.path.abspath(os.path.join(root, n)))
-    return sorted(files)
-
-
-def chunk(text):
-    step = CHUNK_CHARS - OVERLAP
-    pieces = (text[i : i + CHUNK_CHARS] for i in range(0, len(text), step))
-    return [p for p in pieces if p.strip()]
-
-
-def embed(texts, prefix):
-    out = []
-    for i in range(0, len(texts), BATCH):
-        batch = [prefix + t for t in texts[i : i + BATCH]]
-        resp = llm.embeddings.create(model=EMBED_MODEL, input=batch)
-        out.extend(d.embedding for d in resp.data)
-    return out
 
 
 def file_filter(path):
@@ -78,7 +44,7 @@ def ensure_collection(dim):
 
 
 def index_docs():
-    files = list_files()
+    files = list_files(DOCS_DIR, absolute=True)
     if not files:
         sys.exit(f"No supported files found in {DOCS_DIR!r}")
     new = updated = skipped = 0
@@ -97,7 +63,7 @@ def index_docs():
         chunks = chunk(text)
         if not chunks:
             continue
-        vecs = embed(chunks, "search_document: ")
+        vecs = embed(llm, EMBED_MODEL, chunks, "search_document: ")
         ensure_collection(len(vecs[0]))
         if old is not None:  # file changed: drop its old chunks
             qdrant.delete(COLLECTION, points_selector=models.FilterSelector(filter=file_filter(path)))
@@ -120,7 +86,7 @@ def index_docs():
 
 
 def answer(query):
-    qvec = embed([query], "search_query: ")[0]
+    qvec = embed(llm, EMBED_MODEL, [query], "search_query: ")[0]
     hits = qdrant.query_points(COLLECTION, query=qvec, limit=TOP_K, with_payload=True).points
     context = "\n\n".join(f"[{i + 1}] ({h.payload['file']})\n{h.payload['text']}" for i, h in enumerate(hits))
     messages = [
