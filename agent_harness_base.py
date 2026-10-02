@@ -35,12 +35,23 @@ ROUTER_MODEL = os.getenv("ROUTER_MODEL", "qwen2.5:1.5b")
 ROUTER_KEEP_ALIVE = os.getenv("ROUTER_KEEP_ALIVE", "30m")
 DOCS_TOOL_NAME = "answer_docs"
 
-ROUTER_PROMPT = """Decide whether answering the message needs facts from the user's own \
-indexed documents - their notes, records, resumes, contracts, saved plans.
+ROUTER_PROMPT = """Does answering this message need the user's own documents - their \
+notes, records, resumes, contracts, travel plans, saved plans, anything they wrote \
+or saved about themselves?
 
-Answer yes only for questions about those specific documents or their contents.
-Answer no for general knowledge, arithmetic, coding, and anything about files in \
-the working directory.
+Answer no ONLY for these, which need no document:
+- arithmetic and pure computation
+- general knowledge and factual questions about the world
+- coding questions
+- a named file in the working directory, like "what is in config.json"
+
+Answer yes for everything else, including:
+- first person or possessive: "we", "I", "my", "our"
+- their own plans, records, decisions or history
+- anything referring to a specific trip, person, job, contract or document
+
+If you are unsure, answer yes. A false yes only adds an option the model can ignore; \
+a false no means the documents can never be searched.
 
 Reply with exactly one word, yes or no.
 
@@ -214,6 +225,7 @@ def needs_documents(prompt):
             model=ROUTER_MODEL,
             messages=[{"role": "user", "content": ROUTER_PROMPT + prompt}],
             max_tokens=3,
+            temperature=0,  # deterministic: an eval that moves between runs is useless
             extra_body={"keep_alive": ROUTER_KEEP_ALIVE},
         )
         return "yes" in (resp.choices[0].message.content or "").strip().lower()

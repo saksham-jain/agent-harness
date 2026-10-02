@@ -1,0 +1,113 @@
+{
+  "_comment": [
+    "Labelled eval cases. sources are matched on basename so the same case works",
+    "whether the index was built on the host or inside the container.",
+    "must_retrieve: the router is expected to offer answer_docs for this question.",
+    "must_abstain: answer_docs is expected to say it does not know.",
+    "must_cite: the answer must carry [n] citations that resolve to sources."
+  ],
+  "cases": [
+    {
+      "id": "hotel-duration",
+      "query": "how long is the hotel booked for?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": ["test.md"],
+        "answer_contains": "3",
+        "must_cite": true,
+        "must_abstain": false
+      }
+    },
+    {
+      "id": "trip-when",
+      "query": "when are we visiting Hampi?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": ["test.md"],
+        "answer_contains": "November",
+        "must_cite": true,
+        "must_abstain": false
+      }
+    },
+    {
+      "id": "trip-destination",
+      "query": "which place are we travelling to?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": ["test.md"],
+        "must_cite": true,
+        "must_abstain": false
+      }
+    },
+    {
+      "id": "unrelated-fact",
+      "query": "what is the capital of France?",
+      "expect": {
+        "must_retrieve": false,
+        "must_abstain": false
+      }
+    },
+    {
+      "id": "arithmetic",
+      "query": "what is 10 + 2?",
+      "expect": {
+        "must_retrieve": false,
+        "must_abstain": false
+      }
+    },
+    {
+      "id": "not-in-corpus",
+      "query": "what did the lease say about the termination clause?",
+      "expect": {
+        "must_retrieve": true,
+        "must_abstain": true
+      }
+    },
+    {
+      "id": "file-on-disk",
+      "query": "what is in requirements.txt?",
+      "expect": {
+        "must_retrieve": false,
+        "must_abstain": false
+      }
+    }
+  ],
+
+  "_holdout_comment": [
+    "Written after the router prompt was last tuned, and never used to change it.",
+    "This is the honest number. `cases` above is a tuning set, so its score is",
+    "optimistic. Re-tune against cases, then read holdout."
+  ],
+  "holdout": [
+    {
+      "id": "h-booking-date",
+      "query": "when did I book that hotel?",
+      "expect": { "must_retrieve": true, "sources": ["test.md"], "must_cite": true }
+    },
+    {
+      "id": "h-venue-decision",
+      "query": "remind me what we decided about the venue",
+      "expect": { "must_retrieve": true, "must_abstain": true }
+    },
+    {
+      "id": "h-my-email",
+      "query": "what's my email address on file?",
+      "expect": { "must_retrieve": true, "must_abstain": true }
+    },
+    {
+      "id": "h-photosynthesis",
+      "query": "explain photosynthesis in two sentences",
+      "expect": { "must_retrieve": false }
+    },
+    {
+      "id": "h-unit-conversion",
+      "query": "convert 5 km to miles",
+      "expect": { "must_retrieve": false }
+    },
+    {
+      "id": "h-python-help",
+      "query": "how do I reverse a list in python?",
+      "expect": { "must_retrieve": false }
+    }
+  ]
+}

@@ -81,6 +81,17 @@ saved, so the router is held resident with `keep_alive`.
 | Skills | `skills.py` + `skills/*/SKILL.md` | Playbooks the agent can load on demand |
 | Indexer | `index_docs.py` | Thin CLI over the RAG service |
 
+| Layer | File | Responsibility |
+| --- | --- | --- |
+| AI Harness | `agent_harness_base.py` | The agent loop. Never imports Qdrant |
+| MCP Client | `mcp_client.py` | Tool discovery, schema conversion, dispatch |
+| MCP Server | `mcp_server.py` | Protocol only. Tools delegate to the RAG service |
+| RAG Service | `rag_service.py` | Embedding and retrieval over Qdrant |
+| Corpus | `corpus.py` | File discovery, chunking, batched embedding |
+| Skills | `skills.py` + `skills/*/SKILL.md` | Playbooks the agent can load on demand |
+| Indexer | `index_docs.py` | Thin CLI over the RAG service |
+| Evals | `evals/` | Labelled cases and the scoring runner |
+
 Each layer only knows the one below it. `rag_service` is testable without any MCP,
 and the harness is usable by any MCP client.
 
@@ -131,6 +142,25 @@ on demand via `load_skill`, so a long playbook costs nothing until it is used.
 Invoke with `/<name>`, or let the model call `load_skill` when a description matches.
 Expect the automatic path to be unreliable on `qwen2.5:7b` — the same model that
 misroutes tools. Two skills ship: `commit` and `stack-status`.
+
+## Evals
+
+```bash
+../.venv/bin/python3 evals/run.py --fast    # retrieval + routing, seconds
+../.venv/bin/python3 evals/run.py --full    # also grades answers, one generation per case
+```
+
+Split by cost on purpose. Retrieval and routing need no generation, run in seconds, and
+are where the failures have actually been — so they can gate every change. Answer grading
+costs a generation per case and is only worth running when the answer path changes.
+
+Prose quality is deliberately **not** graded: that needs a judge model, and with a 7B
+judge that mostly measures the judge. Structure is graded instead — did it abstain, do
+the citations resolve.
+
+`cases.json` holds two sets. `cases` is a **tuning set**: the router prompt was last
+changed against it, so its score is optimistic. `holdout` was written afterwards and is
+never tuned against — that is the number to trust, and it is what the exit code gates on.
 
 ## Logs
 
