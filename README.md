@@ -87,6 +87,8 @@ and the harness is usable by any MCP client.
 **Ollama is not a compose service** — Metal acceleration needs it on the Mac, so the
 containers reach it over `host.docker.internal:11434`.
 
+Next steps, and what each one teaches: **[ENHANCEMENTS.md](ENHANCEMENTS.md)**.
+
 ## Run
 
 ```bash
