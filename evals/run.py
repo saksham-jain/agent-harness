@@ -110,7 +110,7 @@ def check_full(cases, bridge, verbose=False):
             answer = result_to_text(bridge.call("answer_docs", {"query": case["query"]}))
         except Exception as e:
             answer = f"ERROR: {e}"
-        row["_secs"] = time.time() - t
+        row["_full_secs"] = time.time() - t
         row["answer"] = answer
 
         low = answer.lower()
@@ -147,19 +147,21 @@ def summarise(rows, keys):
 
 
 def report(title, rows, keys, labels):
+    """Print pass rates plus latency. Latency keys are per-mode so a retrieval
+    measurement is never averaged together with a generation one -- that bug
+    reported 0.54s for answers that actually take ~37s."""
     s = summarise(rows, keys)
     print(f"\n  {title}")
     for k, label in zip(keys, labels):
         if k in s:
             n = sum(1 for r in rows if r.get(k) is not None)
-            flag = "" if s[k] >= 0.999 or k == "recall" else ""
-            print(f"    {label:<34} {s[k]:.2f}  ({n} cases){flag}")
-    secs = [r["_secs"] for r in rows if "_secs" in r]
-    route = [r["_route_secs"] for r in rows if "_route_secs" in r]
-    if secs:
-        print(f"    {'latency p50':<34} {sorted(secs)[len(secs) // 2]:.2f}s")
-    if route:
-        print(f"    {'router latency p50':<34} {sorted(route)[len(route) // 2]:.2f}s")
+            print(f"    {label:<34} {s[k]:.2f}  ({n} cases)")
+    for key, label in (("_secs", "retrieval latency p50"),
+                       ("_full_secs", "answer latency p50"),
+                       ("_route_secs", "router latency p50")):
+        vals = [r[key] for r in rows if key in r]
+        if vals:
+            print(f"    {label:<34} {sorted(vals)[len(vals) // 2]:.2f}s")
     return s
 
 
@@ -199,10 +201,13 @@ def main():
         if bridge is None:
             print("\n  full  skipped: mcp server unreachable")
         else:
-            rows += check_full(cases, bridge, args.verbose)
-            report("full  (generates answers)", rows,
+            report("full  tuning set", check_full(cases, bridge, args.verbose),
                    ["abstain_ok", "cite_ok", "contains_ok"],
                    ["abstention accuracy", "citation validity", "answer contains"])
+            if holdout:
+                report("full  HOLDOUT", check_full(holdout, bridge, args.verbose),
+                       ["abstain_ok", "cite_ok", "contains_ok"],
+                       ["abstention accuracy", "citation validity", "answer contains"])
 
     # Gate on the holdout, not the tuning set: a tuned set always looks good. The bar
     # is not 1.0 -- routing is a judgement call and the residual errors are mostly
