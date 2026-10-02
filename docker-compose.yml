@@ -54,10 +54,11 @@ services:
       - LLM_BASE_URL=http://host.docker.internal:11434/v1   # native Ollama on your Mac
       - LLM_MODEL=qwen2.5:7b
       - MCP_SERVER_URL=http://mcp-server:8000/mcp
+      - SKILLS_DIR=/work/skills
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ${WORKDIR:-.:/work}       # the agent's working dir for bash/read_file/write_file
+      - ${WORKDIR:-.:/work}       # the agent's working dir, including skills/
 
   index:
     build: .

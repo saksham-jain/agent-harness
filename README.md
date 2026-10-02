@@ -48,6 +48,7 @@ inference, Qdrant for vectors, MCP between the layers, Docker Compose to run it.
 | MCP Server | `mcp_server.py` | Protocol only. Tools delegate to the RAG service |
 | RAG Service | `rag_service.py` | Embedding and retrieval over Qdrant |
 | Corpus | `corpus.py` | File discovery, chunking, batched embedding |
+| Skills | `skills.py` + `skills/*/SKILL.md` | Playbooks the agent can load on demand |
 | Indexer | `index_docs.py` | Thin CLI over the RAG service |
 
 Each layer only knows the one below it. `rag_service` is testable without any MCP,
@@ -70,11 +71,34 @@ Inside the agent:
 
 ```
 > /tools
+> /skills
 > /call answer_docs {"query": "how long is the trip?"}
-> /help
+> /commit
 ```
 
-Slash commands skip the model, so a tool always runs exactly as asked.
+Slash commands skip the model, so a tool or skill always runs exactly as asked.
+
+## Skills
+
+Playbooks in `skills/<name>/SKILL.md`, following the
+[Agent Skills](https://agentskills.io) open format — the same one Claude Code reads, so
+these files work in both. YAML frontmatter plus a markdown body:
+
+```yaml
+---
+name: commit
+description: Write and create a git commit. Use when the user asks to commit.
+---
+
+Run `git status --short` and `git diff`, then `git commit -F -`.
+```
+
+Only `name` and `description` go in the system prompt (~50 tokens each); the body loads
+on demand via `load_skill`, so a long playbook costs nothing until it is used.
+
+Invoke with `/<name>`, or let the model call `load_skill` when a description matches.
+Expect the automatic path to be unreliable on `qwen2.5:7b` — the same model that
+misroutes tools. Two skills ship: `commit` and `stack-status`.
 
 ## Logs
 

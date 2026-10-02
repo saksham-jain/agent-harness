@@ -12,6 +12,7 @@ import subprocess
 from openai import OpenAI
 
 from mcp_client import connect, result_to_text
+from skills import catalog, list_skills, load as load_skill_body
 
 client = OpenAI(
     base_url=os.getenv("LLM_BASE_URL", "http://localhost:11434/v1"),
@@ -41,8 +42,14 @@ Examples:
   "who wrote Dune?"                           -> no tool, just answer"""
 
 
-def tool(name, desc, props):
-    """OpenAI tool schema for a tool this harness runs itself."""
+def tool(name, desc, props, optional=None):
+    """OpenAI tool schema for a tool this harness runs itself.
+
+    `props` are required string args; `optional` maps name -> JSON schema.
+    """
+    properties = {k: {"type": "string"} for k in props}
+    for k, schema in (optional or {}).items():
+        properties[k] = schema
     return {
         "type": "function",
         "function": {
@@ -50,7 +57,7 @@ def tool(name, desc, props):
             "description": desc,
             "parameters": {
                 "type": "object",
-                "properties": {k: {"type": "string"} for k in props},
+                "properties": properties,
                 "required": list(props),
             },
         },
@@ -61,12 +68,24 @@ LOCAL_TOOLS = [
     tool("bash", "Run a shell command and return stdout/stderr.", ["command"]),
     tool("read_file", "Read a text file.", ["path"]),
     tool("write_file", "Write text to a file, overwriting it.", ["path", "content"]),
+    tool(
+        "load_skill",
+        "Load the full playbook for one of the available skills. Use when a task matches "
+        "a skill description. Returns the instructions to follow.",
+        ["name"],
+    ),
 ]
 LOCAL_NAMES = {t["function"]["name"] for t in LOCAL_TOOLS}
 
 
 def run_local_tool(name, args):
     try:
+        if name == "load_skill":
+            body = load_skill_body(args["name"])
+            if body is None:
+                available = ", ".join(s["name"] for s in list_skills()) or "none"
+                return f"No skill named {args['name']!r}. Available: {available}"
+            return f"# skill: {args['name']}\n\n{body}"
         if name == "bash":
             print(f"\n$ {args['command']}")
             if input("run? [y/N] ").strip().lower() != "y":
@@ -107,10 +126,18 @@ def handle_command(line, tools, bridge):
     if cmd in ("/help", "/?"):
         return (
             "/tools                 list every tool the agent has\n"
+            "/skills                list available skill playbooks\n"
             "/call <tool> <json>    call a tool directly, no model involved\n"
-            "                        e.g. /call answer_docs {\"query\": \"how long is the trip?\"}\n"
+            "/<skill-name>          run a skill's playbook\n"
             "anything else          goes to the model"
         )
+
+    if cmd == "/skills":
+        found = list_skills()
+        if not found:
+            return f"No skills found in $SKILLS_DIR ({os.getenv('SKILLS_DIR', 'skills')!r})"
+        lines = [f"  {s['name']:<14} {s['description']}" for s in found]
+        return "Available skills:\n" + "\n".join(lines)
 
     if cmd == "/tools":
         lines = []
@@ -145,7 +172,8 @@ def handle_command(line, tools, bridge):
     return None
 
 
-def run_turn(messages, tools, bridge):
+def run_turn(messages, tools, bridge, prompt):
+    messages.append({"role": "user", "content": prompt})
     for _ in range(MAX_STEPS):
         resp = client.chat.completions.create(model=MODEL, messages=messages, tools=tools)
         msg = resp.choices[0].message
@@ -153,6 +181,11 @@ def run_turn(messages, tools, bridge):
 
         if msg.content:
             print(f"\n{msg.content}")
+        elif not msg.tool_calls:
+            # A small model sometimes stops without saying anything at all. Say so
+            # rather than leaving the user staring at an apparently dead agent.
+            print("\n[model returned nothing - try rephrasing, or call a tool with /call]")
+            return
         if not msg.tool_calls:
             return
 
@@ -184,25 +217,38 @@ def main():
     bridge, mcp_tools = connect(MCP_URL, LOCAL_NAMES)
     tools = LOCAL_TOOLS + mcp_tools
 
-    messages = [{"role": "system", "content": SYSTEM}]
+    messages = [{"role": "system", "content": SYSTEM + catalog()}]
     print(f"Agent ready ({MODEL}).")
     if mcp_tools:
         names = ", ".join(t["function"]["name"] for t in mcp_tools)
         print(f"MCP tools from {MCP_URL}: {names}")
     if not mcp_tools:
         print("  document tools unavailable, so this agent cannot search the corpus")
-    print("Slash commands: /tools, /call <tool> <json>, /help   (Ctrl+C to quit)")
+    found = list_skills()
+    print(f"Skills: {', '.join(s['name'] for s in found) if found else 'none'}")
+    print("Slash commands: /tools, /skills, /call, /<skill>   (Ctrl+C to quit)")
+
     while True:
         try:
             user = input("\n> ")
         except (KeyboardInterrupt, EOFError):
             break
-        reply = handle_command(user, tools, bridge) if user.startswith("/") else None
-        if reply is not None:
-            print(f"\n{reply}")
-            continue
-        messages.append({"role": "user", "content": user})
-        run_turn(messages, tools, bridge)
+
+        if user.startswith("/"):
+            reply = handle_command(user, tools, bridge)
+            if reply is not None:
+                print(f"\n{reply}")
+                continue
+            # Not a known command: maybe it names a skill.
+            body = load_skill_body(user[1:].strip())
+            if body is None:
+                print("\nUnknown command. Try /help, /tools or /skills.")
+                continue
+            print(f"\n[skill] {user[1:].strip()}")
+            run_turn(messages, tools, bridge, f"# skill: {user[1:].strip()}\n\n{body}")
+        else:
+            run_turn(messages, tools, bridge, user)
+
         messages[:] = trim_history(messages)  # bound context growth across turns
 
 
