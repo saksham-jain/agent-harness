@@ -8,11 +8,41 @@ inference, Qdrant for vectors, MCP between the layers, Docker Compose to run it.
 | | |
 | --- | --- |
 | LLM | `qwen2.5:7b` (7.6B, Q4_K_M) via Ollama |
+| Router | `qwen2.5:1.5b` — decides whether a message needs the corpus |
 | Embeddings | `nomic-embed-text` (137M, nomic-bert, 768-dim) |
 | Vector DB | Qdrant `1.19.1`, 768-dim Cosine, collection `rag_nomic_embed_text` |
 | Protocol | MCP Python SDK `2.2.0`, Streamable HTTP |
 | Runtime | Python 3.11 (`python:3.11-slim`), Docker Compose |
 | Retrieval | 800-char chunks, 100 overlap, top-4 |
+
+## Routing
+
+A 7B choosing between nine tools misroutes — it answered *"how long is the hotel
+booked?"* from memory instead of searching. So once per message a small model makes one
+binary call, and the tool list is filtered on the answer:
+
+```
+> how long is the hotel booked?
+[route] documents
+[tool:mcp] answer_docs({"query": "how long is the hotel booked?"})
+```
+
+Measured warm: **~0.7s** for the routing call, against **~37s** for one `answer_docs`.
+
+The two error directions are not symmetric, which is the design:
+
+| | Effect |
+| --- | --- |
+| False negative — needs docs, routed no | `answer_docs` is hidden, so the model cannot search. **Damaging** |
+| False positive — routed yes, did not need | only adds a tool back; the model still chooses. **Harmless** |
+
+So it is deliberately permissive and never forces a call. On a labelled set of eight
+questions `qwen2.5:1.5b` scored 6/8 with **no false negatives**; `qwen2.5:0.5b` scored
+4/8 and routed arithmetic to the corpus, so it is not used. Set `ROUTER_MODEL=""` to
+disable routing entirely.
+
+Pinning matters. An unloaded model costs **~12s** to load, which would dwarf the 0.7s
+saved, so the router is held resident with `keep_alive`.
 
 ## Architecture
 

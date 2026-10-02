@@ -55,6 +55,7 @@ services:
       - LLM_MODEL=qwen2.5:7b
       - MCP_SERVER_URL=http://mcp-server:8000/mcp
       - SKILLS_DIR=/work/skills
+      - ROUTER_MODEL=qwen2.5:1.5b   # small model gating answer_docs; "" disables
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

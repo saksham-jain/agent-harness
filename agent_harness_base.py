@@ -23,6 +23,29 @@ MCP_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8000/mcp")
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "20"))
 MAX_STEPS = 10
 
+# A small model decides, once per message, whether the corpus is needed at all. The
+# 7B has to choose between nine tools at once and misroutes; a binary decision is a
+# much easier ask. Measured warm at ~0.7s, against 37s for one answer_docs call.
+#
+# qwen2.5:0.5b was tried first and scored 4/8 on a labelled set - coin-flip accuracy,
+# and it routed arithmetic to the corpus. 1.5b scored 6/8 with no false negatives,
+# which is the property that matters here: see select_tools(). Set ROUTER_MODEL=""
+# to turn routing off.
+ROUTER_MODEL = os.getenv("ROUTER_MODEL", "qwen2.5:1.5b")
+ROUTER_KEEP_ALIVE = os.getenv("ROUTER_KEEP_ALIVE", "30m")
+DOCS_TOOL_NAME = "answer_docs"
+
+ROUTER_PROMPT = """Decide whether answering the message needs facts from the user's own \
+indexed documents - their notes, records, resumes, contracts, saved plans.
+
+Answer yes only for questions about those specific documents or their contents.
+Answer no for general knowledge, arithmetic, coding, and anything about files in \
+the working directory.
+
+Reply with exactly one word, yes or no.
+
+Message: """
+
 SYSTEM = """You are a helpful coding agent in the user's current directory.
 
 Route each question to the right tool:
@@ -172,6 +195,52 @@ def handle_command(line, tools, bridge):
     return None
 
 
+router = OpenAI(
+    base_url=os.getenv("LLM_BASE_URL", "http://localhost:11434/v1"),
+    api_key=os.getenv("LLM_API_KEY", "ollama"),
+)
+
+
+def needs_documents(prompt):
+    """One binary decision from the small model. True if the corpus is likely needed.
+
+    A failure here must not break the turn, so anything unexpected means "let the main
+    model decide" -- routing is an optimisation, not a gate.
+    """
+    if not ROUTER_MODEL:
+        return None
+    try:
+        resp = router.chat.completions.create(
+            model=ROUTER_MODEL,
+            messages=[{"role": "user", "content": ROUTER_PROMPT + prompt}],
+            max_tokens=3,
+            extra_body={"keep_alive": ROUTER_KEEP_ALIVE},
+        )
+        return "yes" in (resp.choices[0].message.content or "").strip().lower()
+    except Exception as e:
+        print(f"  router unavailable ({e}); letting the main model decide")
+        return None
+
+
+def select_tools(tools, wants_docs):
+    """Constrain the tool list by the routing decision.
+
+    The two failure directions are not symmetric, which is what makes this worth doing:
+
+    - A false negative (needs docs, routed no) hides answer_docs, so the model cannot
+      search and will answer from memory instead. That is the damaging one.
+    - A false positive (routed yes, did not need docs) only adds a tool back. The main
+      model still decides whether to call it, so nothing is wasted.
+
+    So this is deliberately permissive: when in doubt, say yes. It never forces a call.
+    """
+    if wants_docs is None:
+        return tools
+    local = [t for t in tools if t["function"]["name"] in LOCAL_NAMES]
+    docs = [t for t in tools if t["function"]["name"] == DOCS_TOOL_NAME]
+    return local + docs if wants_docs else local
+
+
 def run_turn(messages, tools, bridge, prompt):
     messages.append({"role": "user", "content": prompt})
     for _ in range(MAX_STEPS):
@@ -230,24 +299,34 @@ def main():
 
     while True:
         try:
-            user = input("\n> ")
+            user = input("\n> ").strip()
         except (KeyboardInterrupt, EOFError):
             break
+        if not user:
+            continue  # a bare newline should not cost a router call and a generation
 
+        prompt = None
         if user.startswith("/"):
             reply = handle_command(user, tools, bridge)
             if reply is not None:
                 print(f"\n{reply}")
                 continue
             # Not a known command: maybe it names a skill.
-            body = load_skill_body(user[1:].strip())
+            name = user[1:].strip()
+            body = load_skill_body(name)
             if body is None:
                 print("\nUnknown command. Try /help, /tools or /skills.")
                 continue
-            print(f"\n[skill] {user[1:].strip()}")
-            run_turn(messages, tools, bridge, f"# skill: {user[1:].strip()}\n\n{body}")
+            print(f"\n[skill] {name}")
+            prompt = f"# skill: {name}\n\n{body}"
         else:
-            run_turn(messages, tools, bridge, user)
+            prompt = user
+
+        if prompt is not None:
+            wants_docs = needs_documents(prompt)
+            if wants_docs is not None:
+                print(f"[route] {'documents' if wants_docs else 'no documents'}")
+            run_turn(messages, select_tools(tools, wants_docs), bridge, prompt)
 
         messages[:] = trim_history(messages)  # bound context growth across turns
 
