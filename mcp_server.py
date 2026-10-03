@@ -18,14 +18,21 @@ from datetime import datetime, timezone
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel
 
+import auth
 import rag_service
 
 HOST = os.getenv("MCP_HOST", "127.0.0.1")
 PORT = int(os.getenv("MCP_PORT", "8000"))
 PATH = os.getenv("MCP_PATH", "/mcp")
 SERVER_NAME = "agent-harness-docs"
+
+# DNS-rebinding protection. The SDK defaults this OFF for backwards compatibility, which
+# leaves any browser page a user visits able to talk to an instance on their machine.
+# Empty list means disabled, so local development is unaffected.
+ALLOWED_HOSTS = [h for h in os.getenv("MCP_ALLOWED_HOSTS", "").split(",") if h]
 
 logging.basicConfig(
     level=os.getenv("MCP_LOG_LEVEL", "INFO").upper(),
@@ -60,6 +67,8 @@ def logged(fn):
     return wrapper
 
 
+TOKEN_VERIFIER, AUTH_SETTINGS = auth.build()
+
 mcp = MCPServer(
     SERVER_NAME,
     instructions=(
@@ -67,6 +76,10 @@ mcp = MCPServer(
         "citations, see what is in it, and refresh it after files change. Use these for "
         "anything about the user's own documents."
     ),
+    # These two travel together. Passing one without the other is a ValueError here,
+    # at construction, before the server ever serves a request.
+    token_verifier=TOKEN_VERIFIER,
+    auth=AUTH_SETTINGS,
 )
 
 
@@ -115,6 +128,16 @@ def index_status() -> str:
     )
 
 
+@mcp.tool(title="Who am I")
+@logged
+def whoami() -> str:
+    """Report which authenticated caller is on this request, and its scopes."""
+    token = auth.whoami()
+    if token is None:
+        return "anonymous: no token on this request (auth is off, or this is not HTTP)"
+    return f"subject={token.subject} client_id={token.client_id} scopes={','.join(token.scopes)}"
+
+
 @mcp.resource("docs://status")
 @logged
 def status() -> str:
@@ -124,4 +147,16 @@ def status() -> str:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http", host=HOST, port=PORT, streamable_http_path=PATH)
+    # transport_security is a run() argument, not a constructor argument.
+    mcp.run(
+        transport="streamable-http",
+        host=HOST,
+        port=PORT,
+        streamable_http_path=PATH,
+        transport_security=TransportSecuritySettings(
+            # Enabling the check with an empty allow list would lock out every
+            # request, including local ones. Only turn it on with hosts named.
+            enable_dns_rebinding_protection=bool(ALLOWED_HOSTS),
+            allowed_hosts=ALLOWED_HOSTS,
+        ),
+    )

@@ -25,8 +25,18 @@ services:
       - EMBED_MODEL=nomic-embed-text
       - DOCS_DIR=/docs
       - MIN_SCORE=0.5             # relevance floor; tune per embedding model
+      # Auth is off by default so local development needs no setup. Turn it on when
+      # anything other than you can reach this container.
+      - MCP_AUTH=${MCP_AUTH:-0}
+      - MCP_RESOURCE_URL=${MCP_RESOURCE_URL:-http://mcp-server:8000/mcp}
+      - MCP_ISSUER_URL=${MCP_ISSUER_URL:-https://auth.example.com/}
+      - MCP_REQUIRED_SCOPES=${MCP_REQUIRED_SCOPES:-docs:read}
+      - MCP_ALLOWED_HOSTS=${MCP_ALLOWED_HOSTS:-}
+      - MCP_TOKENS_FILE=/run/tokens.json
     volumes:
       - ${DOCS_DIR:-./docs}:/docs:ro
+      # Read-only: the server only ever reads the token table.
+      - ./tokens.json:/run/tokens.json:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -54,6 +64,9 @@ services:
       - LLM_BASE_URL=http://host.docker.internal:11434/v1   # native Ollama on your Mac
       - LLM_MODEL=qwen2.5:7b
       - MCP_SERVER_URL=http://mcp-server:8000/mcp
+      # Sent as `Authorization: Bearer`. Empty means no header, which fails against an
+      # auth-enabled server -- that is the intended behaviour, not a bug.
+      - MCP_BEARER_TOKEN=${MCP_BEARER_TOKEN:-}
       - SKILLS_DIR=/work/skills
       - ROUTER_MODEL=qwen2.5:1.5b   # small model gating answer_docs; "" disables
     extra_hosts:

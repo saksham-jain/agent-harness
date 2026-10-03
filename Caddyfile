@@ -1,0 +1,42 @@
+# TLS termination for the MCP server.
+#
+#   :443 ──TLS──> caddy ──http──> mcp-server (127.0.0.1:8000)
+#
+# TLS belongs here rather than in the Python process: it is a solved problem with
+# automatic certificate renewal, and doing it in-process would mean managing certs,
+# reloads and expiry inside the app.
+#
+# Caddy obtains and renews certificates automatically. For a local dry run use
+# `tls internal` and trust Caddy's root, or just point at the app directly - auth is
+# transport-independent, so it can be verified over plain http before TLS exists.
+
+{$MCP_PUBLIC_HOST} {
+	encode zstd gzip
+
+	# The MCP endpoint. Buffering is off: this is a streaming protocol, and an
+	# intermediary that buffers turns a token stream into a stall.
+	handle /mcp {
+		reverse_proxy mcp-server:8000 {
+			flush_interval -1
+			transport http {
+				# Long generations. Raise or lower to match your slowest tool; the
+				# default read timeout is far below a qwen2.5:7b answer.
+				read_timeout 120s
+			}
+		}
+	}
+
+	# Let the SDK serve RFC 9728 metadata itself rather than duplicating it here.
+	handle /.well-known/oauth-protected-resource/* {
+		reverse_proxy mcp-server:8000
+	}
+
+	handle {
+		respond "not found" 404
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

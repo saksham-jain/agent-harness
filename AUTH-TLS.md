@@ -137,6 +137,60 @@ transport_security=TransportSecuritySettings(allowed_hosts=["docs.example.com", 
 
 Only a few minutes' work, and it closes problem 4 above.
 
+## Try it locally
+
+Auth is transport-independent, so the whole flow verifies over plain http before any TLS
+exists. `.env` in the repo root turns it on:
+
+```bash
+docker compose up -d mcp-server                      # reads .env, MCP_AUTH=1
+```
+
+Without a token:
+
+```bash
+curl -i http://localhost:8000/mcp -X POST \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+# HTTP/1.1 401 Unauthorized
+# www-authenticate: Bearer ... resource_metadata=".../.well-known/oauth-protected-resource/mcp"
+```
+
+Discovery needs no auth:
+
+```bash
+curl -s http://localhost:8000/.well-known/oauth-protected-resource/mcp
+```
+
+With a real token:
+
+```bash
+export MCP_BEARER_TOKEN=$(python3 -c "
+import json
+t = json.load(open('tokens.json'))
+print(next(k for k, v in t.items() if v['subject'] == 'alice'))")
+docker compose --profile client run --rm mcp-client     # agent authenticates
+```
+
+Ask for a token by subject rather than by position. `list(...)[0]` works too and Python
+preserves file order, but it returns whichever key comes first, so the command reads the
+same while meaning something different.
+
+Claude Code:
+
+```bash
+claude mcp remove mydocs -s local
+claude mcp add --transport http mydocs http://localhost:8000/mcp \
+  --header "Authorization: Bearer $MCP_BEARER_TOKEN"
+```
+
+Turn it off again with `MCP_AUTH=0` in `.env`.
+
+`tokens.json` is gitignored and generated locally; `tokens.example.json` is the committed
+template. Tokens are stored in plaintext — it is a lookup table, not a hash — so the file
+is `chmod 600`.
+
 ## Order of work
 
 | # | Step | Blocks everything after? |

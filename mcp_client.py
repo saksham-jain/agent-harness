@@ -12,6 +12,28 @@ import os
 import threading
 
 
+def transport_for(url):
+    """A Streamable HTTP transport, carrying a bearer token if one is configured.
+
+    `Client` takes no headers argument -- headers go on the HTTP client the transport
+    wraps, which is why this builds its own instead of passing the URL straight in.
+    Returns the URL unchanged when no token is set, so an unauthenticated server is
+    left alone.
+    """
+    token = os.getenv("MCP_BEARER_TOKEN", "").strip()
+    if not token:
+        return url
+
+    import httpx2
+    from mcp.client.streamable_http import streamable_http_client
+
+    http_client = httpx2.AsyncClient(
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=float(os.getenv("MCP_TIMEOUT", "300")),
+    )
+    return streamable_http_client(url, http_client=http_client)
+
+
 def to_openai_tool(tool):
     """MCP tool definition -> OpenAI tool schema.
 
@@ -62,7 +84,7 @@ class McpBridge:
 
         async def main():
             self._loop = asyncio.get_running_loop()
-            async with Client(self.url, read_timeout_seconds=self.timeout) as client:
+            async with Client(transport_for(self.url), read_timeout_seconds=self.timeout) as client:
                 self._client = client
                 self.tools = [to_openai_tool(t) for t in (await client.list_tools()).tools]
                 self._ready.set()
