@@ -4,8 +4,8 @@ Working notes for the `feat/auth-tls` branch. Nothing here is implemented yet.
 
 ## Why this is needed
 
-The MCP server is meant to be reachable by users' own Claude Code, over the network.
-Today anything that can reach port 8000 gets full access. Verified, not assumed:
+The MCP server is meant to be reachable by MCP clients over the network. Today anything
+that can reach port 8000 gets full access. Verified, not assumed:
 
 ```
 no credentials of any kind -> ['answer_docs', 'list_docs', 'refresh_index', 'index_status']
@@ -18,7 +18,7 @@ Zero credentials retrieved the corpus. Four concrete exposures:
 | --- | --- | --- |
 | 1 | **No authentication** | Anyone reads the corpus, spends inference budget, or calls `refresh_index` and mutates Qdrant |
 | 2 | **Write tool exposed** | `refresh_index` is a mutation with no auth. An unauthenticated caller can rewrite the index |
-| 3 | **Plain HTTP** | Bearer tokens would cross the network in cleartext. `claude mcp add` needs https for a remote host |
+| 3 | **Plain HTTP** | Bearer tokens would cross the network in cleartext. Most MCP clients require https for a remote host |
 | 4 | **DNS-rebinding protection off** | The SDK defaults `TransportSecuritySettings(enable_dns_rebinding_protection=False)` for backwards compatibility. A browser on a user's machine could be made to talk to the local instance |
 
 Docker publishes `8000:8000` on all interfaces (`0.0.0.0`), so this is exposed as soon
@@ -80,8 +80,8 @@ the shape; it is not the end state.
 
 ```python
 USERS = {
-    "tok_alice": {"subject": "alice", "collection": "docs_alice"},
-    "tok_bob":   {"subject": "bob",   "collection": "docs_bob"},
+    "tok_saksham": {"subject": "saksham", "collection": "docs_saksham"},
+    "tok_bob":     {"subject": "bob",     "collection": "docs_bob"},
 }
 ```
 
@@ -177,12 +177,23 @@ Ask for a token by subject rather than by position. `list(...)[0]` works too and
 preserves file order, but it returns whichever key comes first, so the command reads the
 same while meaning something different.
 
-Claude Code:
+Our own client:
 
 ```bash
-claude mcp remove mydocs -s local
-claude mcp add --transport http mydocs http://localhost:8000/mcp \
-  --header "Authorization: Bearer $MCP_BEARER_TOKEN"
+export MCP_BEARER_TOKEN=...          # see above
+docker compose --profile client run --rm mcp-client
+```
+
+Or probe directly, which is what a test should do:
+
+```bash
+MCP_BEARER_TOKEN=$TOKEN python3 -c "
+import anyio, mcp_client
+from mcp import Client
+async def m():
+    async with Client(mcp_client.transport_for('http://localhost:8000/mcp')) as c:
+        print([t.name for t in (await c.list_tools()).tools])
+anyio.run(m)"
 ```
 
 Turn it off again with `MCP_AUTH=0` in `.env`.
@@ -229,14 +240,14 @@ curl -s https://docs.example.com/.well-known/oauth-protected-resource/mcp
 
 # with a token -> tools list
 curl -s https://docs.example.com/mcp -X POST \
-  -H 'Authorization: Bearer tok_alice' \
+  -H 'Authorization: Bearer tok_saksham' \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 
-# client side
-claude mcp add --transport http mydocs https://docs.example.com/mcp \
-  --header "Authorization: Bearer tok_alice"
+# client side: MCP_BEARER_TOKEN is read by mcp_client.transport_for()
+export MCP_BEARER_TOKEN=tok_saksham
+python3 agent_harness_base.py
 ```
 
 `Authorization` is an HTTP header, so **stdio and the in-process `Client(mcp)` used in
