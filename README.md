@@ -5,7 +5,7 @@ inference, Qdrant for vectors, MCP between the layers, Docker Compose to run it.
 
 ## What's used
 
-| | |
+| Component | Detail |
 | --- | --- |
 | LLM | `qwen2.5:7b` (7.6B, Q4_K_M) via Ollama |
 | Router | `qwen2.5:1.5b` — decides whether a message needs the corpus |
@@ -14,6 +14,10 @@ inference, Qdrant for vectors, MCP between the layers, Docker Compose to run it.
 | Protocol | MCP Python SDK `2.2.0`, Streamable HTTP |
 | Runtime | Python 3.11 (`python:3.11-slim`), Docker Compose |
 | Retrieval | 800-char chunks, 100 overlap, top-4 |
+| Auth | OAuth 2.1 resource server. `TokenVerifier` + `AuthSettings`, scopes `docs:read`. Static bearer tokens — **not** production auth |
+| Auth libs | `mcp.server.auth.*`, `pydantic` `2.13.5`, `httpx2` `2.13.0` (client side) |
+| TLS | **not yet.** `Caddyfile` written, never run. Plain HTTP, so tokens are localhost-only |
+| Host protection | `TransportSecuritySettings` — DNS-rebinding. **Off** unless `MCP_ALLOWED_HOSTS` is set |
 
 ## Routing
 
@@ -47,45 +51,44 @@ saved, so the router is held resident with `keep_alive`.
 ## Architecture
 
 ```
-┌──────────────────┐
-│    AI Harness    │   agent_harness_base.py
-│  Agent + LLM     │   model loop, bash/read_file/write_file
-└────────┬─────────┘
-         │
-┌────────▼─────────┐
-│    MCP Client    │   mcp_client.py
-└────────┬─────────┘   holds one connection open
-         │  MCP protocol /mcp
-┌────────▼─────────┐
-│    MCP Server    │   mcp_server.py
-│     RAG tools    │   answer_docs, list_docs, refresh_index, index_status
-└────────┬─────────┘
-         │
-┌────────▼─────────┐
-│   RAG Service    │   rag_service.py + corpus.py
-│    embedding     │   embedding, retrieval, indexing
-└────────┬─────────┘
-         │
-┌────────▼─────────┐
-│     Qdrant       │   compose service :6333
-└──────────────────┘
+┌────────────────────────┐
+│      AI Harness        │   agent_harness_base.py
+│     Agent + LLM        │   model loop, local file/shell tools
+└────────────┬───────────┘
+             │
+┌────────────▼───────────┐
+│      MCP Client        │   mcp_client.py
+│                        │   one connection held open, bearer token
+└────────────┬───────────┘
+             │  MCP over Streamable HTTP, Authorization: Bearer <token>
+┌────────────▼───────────┐
+│      MCP Server        │   mcp_server.py — protocol only
+│       RAG tools        │   answer_docs, list_docs, refresh_index,
+└────────────┬───────────┘   index_status, whoami
+             │
+┌────────────▼───────────┐
+│        Auth            │   auth.py — verifies the token, checks scope
+│   TokenVerifier        │   401 + RFC 9728 discovery when it fails
+└────────────┬───────────┘
+             │
+┌────────────▼───────────┐
+│     RAG Service        │   rag_service.py + corpus.py
+│  embedding, retrieval  │   embedding, retrieval, indexing
+└────────────┬───────────┘
+             │
+┌────────────▼───────────┐
+│        Qdrant          │   compose service :6333
+└────────────────────────┘
 ```
 
-| Layer | File | Responsibility |
-| --- | --- | --- |
-| AI Harness | `agent_harness_base.py` | The agent loop. Never imports Qdrant |
-| MCP Client | `mcp_client.py` | Tool discovery, schema conversion, dispatch |
-| MCP Server | `mcp_server.py` | Protocol only. Tools delegate to the RAG service |
-| RAG Service | `rag_service.py` | Embedding and retrieval over Qdrant |
-| Corpus | `corpus.py` | File discovery, chunking, batched embedding |
-| Skills | `skills.py` + `skills/*/SKILL.md` | Playbooks the agent can load on demand |
-| Indexer | `index_docs.py` | Thin CLI over the RAG service |
+TLS sits in front of the whole stack at :443 and is **not yet running** — see below.
 
 | Layer | File | Responsibility |
 | --- | --- | --- |
 | AI Harness | `agent_harness_base.py` | The agent loop. Never imports Qdrant |
-| MCP Client | `mcp_client.py` | Tool discovery, schema conversion, dispatch |
+| MCP Client | `mcp_client.py` | Tool discovery, schema conversion, dispatch, bearer token |
 | MCP Server | `mcp_server.py` | Protocol only. Tools delegate to the RAG service |
+| Auth | `auth.py` | `TokenVerifier` + scope check, between the server and the network |
 | RAG Service | `rag_service.py` | Embedding and retrieval over Qdrant |
 | Corpus | `corpus.py` | File discovery, chunking, batched embedding |
 | Skills | `skills.py` + `skills/*/SKILL.md` | Playbooks the agent can load on demand |
@@ -98,7 +101,41 @@ and the harness is usable by any MCP client.
 **Ollama is not a compose service** — Metal acceleration needs it on the Mac, so the
 containers reach it over `host.docker.internal:11434`.
 
-Next steps, and what each one teaches: **[ENHANCEMENTS.md](ENHANCEMENTS.md)**.
+## Auth and TLS
+
+**Status: auth working, TLS not yet.** Requests cross plain HTTP, so bearer tokens are
+only safe on localhost.
+
+```
+  MCP client ──(Authorization: Bearer <token>)──> Caddy :443
+  any client                                       TLS: Caddyfile written,
+                                                   NOT RUNNING
+        │                                                   │
+        │                                        planned ───┴──> mcp-server :8000
+        │                                                       auth.py verify_token()
+        │                                                         401 if token unknown
+        │                                                         discovery at
+        │                                              /.well-known/oauth-protected-resource/mcp
+        │                                                                  │
+        └────────────────────────── scope check ────────────────────────────┤
+                                                                           ▼
+                                                                   Qdrant :6333
+```
+
+The server is an OAuth 2.1 **resource server**: it verifies tokens, never issues them.
+`auth.py` implements `TokenVerifier`, one async method — the SDK owns the 401, the
+`WWW-Authenticate` pointer and the RFC 9728 discovery document.
+
+Enable with `MCP_AUTH=1` in `.env`. It is currently a **static token table**: possession
+is identity, no expiry, and revocation means editing the file and restarting. Fine for a
+pilot with trusted users, not production auth.
+
+Two things that cost time to find: `token_verifier` and `auth` must be passed together
+or `MCPServer` raises at construction, and `Client` takes no `headers` argument — a
+bearer token has to go on the HTTP client the transport wraps.
+
+Plan and what is still missing: **[AUTH-TLS.md](AUTH-TLS.md)**.
+Roadmap: **[ENHANCEMENTS.md](ENHANCEMENTS.md)**.
 
 ## Run
 
@@ -124,8 +161,8 @@ Slash commands skip the model, so a tool or skill always runs exactly as asked.
 ## Skills
 
 Playbooks in `skills/<name>/SKILL.md`, following the
-[Agent Skills](https://agentskills.io) open format — the same one Claude Code reads, so
-these files work in both. YAML frontmatter plus a markdown body:
+[Agent Skills](https://agentskills.io) open format — an open spec, not one vendor's
+convention. YAML frontmatter plus a markdown body:
 
 ```yaml
 ---
