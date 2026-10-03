@@ -6,8 +6,8 @@
     "token missing the required scope is rejected before any tool runs.",
     "Generate with: python3 -c \"import secrets; print(secrets.token_urlsafe(32))\""
   ],
-  "tok_replace_me_alice": {
-    "subject": "alice",
+  "tok_replace_me_saksham": {
+    "subject": "saksham",
     "client_id": "claude-code",
     "scopes": ["docs:read"]
   },

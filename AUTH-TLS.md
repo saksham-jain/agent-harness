@@ -169,7 +169,7 @@ With a real token:
 export MCP_BEARER_TOKEN=$(python3 -c "
 import json
 t = json.load(open('tokens.json'))
-print(next(k for k, v in t.items() if v['subject'] == 'alice'))")
+print(next(k for k, v in t.items() if v['subject'] == 'saksham'))")
 docker compose --profile client run --rm mcp-client     # agent authenticates
 ```
 
