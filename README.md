@@ -98,7 +98,43 @@ and the harness is usable by any MCP client.
 **Ollama is not a compose service** — Metal acceleration needs it on the Mac, so the
 containers reach it over `host.docker.internal:11434`.
 
-Next steps, and what each one teaches: **[ENHANCEMENTS.md](ENHANCEMENTS.md)**.
+## Auth and TLS
+
+**Status: auth working, TLS not yet.** Requests cross plain HTTP, so bearer tokens are
+only safe on localhost.
+
+```
+                    public                        internal network
+               ┌──────────────┐               ┌──────────────────┐
+ Claude Code ─>│    :443      │               │  mcp-server      │
+ (MCP client)  │  TLS         │  planned ───> │  :8000           │
+               │  Caddy ──────┼──  plain HTTP │  auth.py         │
+               │  Caddyfile   │               │   verify_token() │
+               │  config only │               └────────┬─────────┘
+               │  NOT RUNNING │                        │
+               └──────────────┘   Bearer <token> ──────┤ 401 when unknown
+                                                 ──────┤ discovery at
+                                                        │ /.well-known/...
+                                                        ▼
+                                                ┌──────────────────┐
+                                                │  Qdrant :6333    │
+                                                └──────────────────┘
+```
+
+The server is an OAuth 2.1 **resource server**: it verifies tokens, never issues them.
+`auth.py` implements `TokenVerifier`, one async method — the SDK owns the 401, the
+`WWW-Authenticate` pointer and the RFC 9728 discovery document.
+
+Enable with `MCP_AUTH=1` in `.env`. It is currently a **static token table**: possession
+is identity, no expiry, and revocation means editing the file and restarting. Fine for a
+pilot with trusted users, not production auth.
+
+Two things that cost time to find: `token_verifier` and `auth` must be passed together
+or `MCPServer` raises at construction, and `Client` takes no `headers` argument — a
+bearer token has to go on the HTTP client the transport wraps.
+
+Plan and what is still missing: **[AUTH-TLS.md](AUTH-TLS.md)**.
+Roadmap: **[ENHANCEMENTS.md](ENHANCEMENTS.md)**.
 
 ## Run
 
