@@ -177,6 +177,10 @@ HTTP header, so stdio and the in-process `Client(mcp)` never see auth — a test
 | 30s MCP timeout vs a 37s tool | Every document call timed out |
 | Two eval defects under an all-1.00 run | The harness was measuring the wrong thing |
 | Duplicated layer table in the README | Caught only by auditing before a commit |
+| Assumed a correct router meant the model would use the tool | The 7B was offered `answer_docs` and answered *"no tool"* — 0 of 3 document questions. Routing accuracy read **1.00** on a completely broken path, so the only metric watching this was blind to it |
+| Wrote a `$(python3 ...)` token into `.env` expecting substitution | Compose does not run it. The container received a 119-character literal string as its bearer token |
+| Pasted a token by hand and truncated it | 24 of 44 characters. Every request `401`, and `connect()` reported "unavailable" — which reads like a network problem |
+| Put `MCP_SERVER_URL` as a literal in `docker-compose.yml` | `.env` cannot override a hardcoded value, so the client kept dialling an internal address that now answers `421` |
 | Diagnosed a "duplicate point" as a `_stored_hash` bug | It read `None` only because I had scrolled with `with_payload=['doc_id','source']`, so Qdrant returned nothing for `hash`. The real cause was a stale `index` image |
 | Ran `docker compose build` and assumed every service was rebuilt | Per-service images. `agent_harness-index` stayed two days old and kept writing pre-`doc_id` payloads, so host and container runs pruned each other on every pass |
 | Treated `#` headings as chunk boundaries everywhere | Produced 32 chunks of ~76 chars from a 2.4 KB file. Only `# ` is a document boundary; `##` sections pack together, since the heading text stays in the chunk |
@@ -199,6 +203,7 @@ HTTP header, so stdio and the in-process `Client(mcp)` never see auth — a test
 | Retrieval at scale | `top-4` now dedupes across documents and chunks follow structure, but nothing has been measured above ~10 documents yet |
 | Prompt injection | Document text enters prompts unescaped |
 | Real auth | Static table: no expiry, revocation needs a restart |
+| Tool choice | The 7B still declines `answer_docs` on its own — the router's decision is now enforced rather than advisory, which works but is a patch over a prompt that misstates what the model knows |
 | Per-tool scopes | `refresh_index` is a mutation and every token holds `docs:read` |
 
 ### The exposure that outlived TLS

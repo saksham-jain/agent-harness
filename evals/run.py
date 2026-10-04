@@ -84,13 +84,64 @@ def check_fast(cases, verbose=False):
             row["_route_secs"] = time.time() - t
             row["routing_ok"] = decision == expect["must_retrieve"]
             row["routed_docs"] = decision
+            # Whether the *model* would have called the tool, given the router said yes.
+            # Scoring routing alone cannot catch the failure this column exists for: the
+            # router was right every time while qwen2.5:7b answered "no tool" anyway, so
+            # routing accuracy read 1.00 on a completely broken path.
+            row["model_ok"] = _model_would_call(case["query"], decision)
         else:
             row["routing_ok"] = None
+            row["model_ok"] = None
 
         rows.append(row)
         if verbose:
             _print_case(row, case)
     return rows
+
+
+def _model_would_call(query, wants_docs, tools=None):
+    """Would the main model call answer_docs, given the router's decision?
+
+    Returns None when it cannot be determined (no bridge, or the router abstained), so it
+    never turns an infrastructure problem into a routing failure.
+    """
+    if wants_docs is None:
+        return None
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(
+            base_url=str(harness.client.base_url).rstrip("/"),
+            api_key=harness.client.api_key or "ollama",
+            timeout=180,
+        )
+        tool = {
+            "type": "function",
+            "function": {
+                "name": harness.DOCS_TOOL_NAME,
+                "description": (
+                    "Answer a question using the indexed documents. Returns a cited answer, "
+                    "or says plainly that the documents do not cover it."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            },
+        }
+        resp = client.chat.completions.create(
+            model=harness.MODEL,
+            messages=[
+                {"role": "system", "content": harness.SYSTEM},
+                {"role": "user", "content": query},
+            ],
+            tools=[tool],
+        )
+        return bool(resp.choices[0].message.tool_calls)
+    except Exception as e:
+        print(f"  model_would_call unavailable ({type(e).__name__}: {e})")
+        return None
 
 
 def check_full(cases, bridge, verbose=False):
@@ -183,7 +234,8 @@ def main():
 
     rows = check_fast(cases, args.verbose)
     fast = report("fast  tuning set", rows,
-                  ["retrieval_ok", "routing_ok"], ["retrieval recall@4", "routing accuracy"])
+                  ["retrieval_ok", "routing_ok", "model_ok"],
+                  ["retrieval recall@4", "routing accuracy", "model would call"])
 
     # The tuning set is contaminated by definition: the router prompt was changed
     # against it. The holdout is the number to trust.
@@ -193,7 +245,8 @@ def main():
         print(f"\n  {len(holdout)} held-out cases (never tuned against)")
         hrows = check_fast(holdout, args.verbose)
         hold = report("fast  HOLDOUT", hrows,
-                      ["retrieval_ok", "routing_ok"], ["retrieval recall@4", "routing accuracy"])
+                      ["retrieval_ok", "routing_ok", "model_ok"],
+                      ["retrieval recall@4", "routing accuracy", "model would call"])
 
     failed = False
     if args.full:
