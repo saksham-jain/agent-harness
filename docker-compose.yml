@@ -33,14 +33,23 @@ services:
       - MCP_REQUIRED_SCOPES=${MCP_REQUIRED_SCOPES:-docs:read}
       - MCP_ALLOWED_HOSTS=${MCP_ALLOWED_HOSTS:-}
       - MCP_TOKENS_FILE=/run/tokens.json
+      # TLS. Generate with `mkcert localhost`. Unset means plain http.
+      - MCP_TLS_CERT=${MCP_TLS_CERT:-}
+      - MCP_TLS_KEY=${MCP_TLS_KEY:-}
     volumes:
       - ${DOCS_DIR:-./docs}:/docs:ro
       # Read-only: the server only ever reads the token table.
       - ./tokens.json:/run/tokens.json:ro
+      # Read-only, and gitignored: contains a private key.
+      - ./.certs:/certs:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "8000:8000"   # exposed so the host (MCP Inspector, curl) can reach it too
+      # The container listens on 8000 either way. 8000 is plain http; 8443 is the same
+      # port reached over TLS when MCP_TLS_CERT is set. Drop the first mapping once TLS
+      # is the only path you use.
+      - "8000:8000"
+      - "8443:8000"
     healthcheck:
       # TCP connect only: the server exposes no unauthenticated health route.
       test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), 3).close()"]

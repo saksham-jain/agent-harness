@@ -34,6 +34,12 @@ SERVER_NAME = "agent-harness-docs"
 # Empty list means disabled, so local development is unaffected.
 ALLOWED_HOSTS = [h for h in os.getenv("MCP_ALLOWED_HOSTS", "").split(",") if h]
 
+# TLS. Both must be set to serve https; unset means plain http, which is the status quo
+# and still the right thing on a loopback-only setup. Generate with `mkcert localhost`.
+TLS_CERT = os.getenv("MCP_TLS_CERT", "")
+TLS_KEY = os.getenv("MCP_TLS_KEY", "")
+LOG_LEVEL = os.getenv("MCP_LOG_LEVEL", "INFO")
+
 logging.basicConfig(
     level=os.getenv("MCP_LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
@@ -147,16 +153,37 @@ def status() -> str:
 
 
 if __name__ == "__main__":
-    # transport_security is a run() argument, not a constructor argument.
-    mcp.run(
-        transport="streamable-http",
-        host=HOST,
-        port=PORT,
-        streamable_http_path=PATH,
-        transport_security=TransportSecuritySettings(
-            # Enabling the check with an empty allow list would lock out every
-            # request, including local ones. Only turn it on with hosts named.
-            enable_dns_rebinding_protection=bool(ALLOWED_HOSTS),
-            allowed_hosts=ALLOWED_HOSTS,
-        ),
+    transport_security = TransportSecuritySettings(
+        # Enabling the check with an empty allow list would lock out every request,
+        # including local ones. Only turn it on with hosts named.
+        enable_dns_rebinding_protection=bool(ALLOWED_HOSTS),
+        allowed_hosts=ALLOWED_HOSTS,
     )
+
+    if TLS_CERT and TLS_KEY:
+        # mcp.run() builds its own uvicorn.Config with host, port and log level only,
+        # so it cannot serve TLS. Take the ASGI app it would have served and hand it
+        # to uvicorn directly. Both paths stay available: with no cert configured this
+        # falls through to plain HTTP, unchanged.
+        import uvicorn
+
+        app = mcp.streamable_http_app(
+            streamable_http_path=PATH, transport_security=transport_security
+        )
+        uvicorn.run(
+            app,
+            host=HOST,
+            port=PORT,
+            log_level=LOG_LEVEL.lower(),
+            ssl_certfile=TLS_CERT,
+            ssl_keyfile=TLS_KEY,
+        )
+    else:
+        # transport_security is a run() argument, not a constructor argument.
+        mcp.run(
+            transport="streamable-http",
+            host=HOST,
+            port=PORT,
+            streamable_http_path=PATH,
+            transport_security=transport_security,
+        )
