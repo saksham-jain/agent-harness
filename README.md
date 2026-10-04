@@ -16,7 +16,7 @@ inference, Qdrant for vectors, MCP between the layers, Docker Compose to run it.
 | Retrieval | 800-char chunks, 100 overlap, top-4 |
 | Auth | OAuth 2.1 resource server. `TokenVerifier` + `AuthSettings`, scopes `docs:read`. Static bearer tokens — **not** production auth |
 | Auth libs | `mcp.server.auth.*`, `pydantic` `2.13.5`, `httpx2` `2.13.0` (client side) |
-| TLS | **not yet.** Plain HTTP, so tokens are localhost-only. `mkcert` plan in [AUTH-TLS.md](AUTH-TLS.md) |
+| TLS | `mkcert localhost`. Served by the app via uvicorn. Trusted only where its CA is installed, so local use only |
 | Host protection | `TransportSecuritySettings` — DNS-rebinding. **Off** unless `MCP_ALLOWED_HOSTS` is set |
 
 ## Routing
@@ -81,7 +81,7 @@ saved, so the router is held resident with `keep_alive`.
 └────────────────────────┘
 ```
 
-TLS sits in front of the whole stack at :443 and is **not yet running** — see below.
+TLS is served by `mcp-server` itself — see **Auth and TLS** below.
 
 | Layer | File | Responsibility |
 | --- | --- | --- |
@@ -103,15 +103,15 @@ containers reach it over `host.docker.internal:11434`.
 
 ## Auth and TLS
 
-**Status: auth working, TLS not yet.** Requests cross plain HTTP, so bearer tokens are
-only safe on localhost.
+**Status: both working.** Bearer tokens are required, and traffic is encrypted with a
+certificate from `mkcert localhost`, whose CA is installed in the macOS keychain.
 
 ```
-  MCP client ──(Authorization: Bearer <token>)──> Caddy :443
-  any client                                       TLS: Caddyfile written,
-                                                   NOT RUNNING
+  MCP client ──(Authorization: Bearer <token>)──> https://localhost:8443
+  any client                                       TLS: MCP_TLS_CERT / MCP_TLS_KEY
+        │                                          → /certs/localhost.pem
         │                                                   │
-        │                                        planned ───┴──> mcp-server :8000
+        │                                        ──────────┴──> mcp-server :8000
         │                                                       auth.py verify_token()
         │                                                         401 if token unknown
         │                                                         discovery at
@@ -126,14 +126,18 @@ The server is an OAuth 2.1 **resource server**: it verifies tokens, never issues
 `auth.py` implements `TokenVerifier`, one async method — the SDK owns the 401, the
 `WWW-Authenticate` pointer and the RFC 9728 discovery document.
 
-Enable with `MCP_AUTH=1` in `.env`. It is currently a **static token table**: possession
-is identity, no expiry, and revocation means editing the file and restarting. Fine for a
-pilot with trusted users, not production auth.
+Enable auth with `MCP_AUTH=1` in `.env`. It is currently a **static token table**:
+possession is identity, no expiry, and revocation means editing the file and restarting.
+Fine for a pilot with trusted users, not production auth.
 
-TLS is deliberately **not** done yet. Auth alone is enough while only you can reach the
-server; TLS only matters at the point someone else can, and it needs a hostname, which
-means a domain or a tunnel. The two-stage plan — encrypted localhost first via
-`mkcert`, a real hostname later — is in [AUTH-TLS.md](AUTH-TLS.md).
+TLS is served by the app itself: `MCPServer.run()` exposes no SSL options, so with a cert
+configured the server builds the ASGI app and hands it to uvicorn. The client trusts the
+certificate through `httpx2`/`truststore` against the OS store, with no `verify=` and no
+CA path in config. With no certificate set, the plain-HTTP path is used unchanged.
+
+A certificate generated that way exists only on machines where its CA is installed, so it
+is enough for local use and **not** enough to let anyone else connect. That needs a real
+hostname — a domain or a tunnel. See [AUTH-TLS.md](AUTH-TLS.md).
 
 Two things that cost time to find: `token_verifier` and `auth` must be passed together
 or `MCPServer` raises at construction, and `Client` takes no `headers` argument — a
@@ -141,6 +145,8 @@ bearer token has to go on the HTTP client the transport wraps.
 
 Plan and what is still missing: **[AUTH-TLS.md](AUTH-TLS.md)**.
 Roadmap: **[ENHANCEMENTS.md](ENHANCEMENTS.md)**.
+How the project got here, mistakes included: **[BUILD-JOURNEY.md](BUILD-JOURNEY.md)**.
+Rules for agents and contributors: **[AGENTS.md](AGENTS.md)**.
 
 ## Run
 
