@@ -14,6 +14,8 @@ inference, Qdrant for vectors, MCP between the layers, Docker Compose to run it.
 | Protocol | MCP Python SDK `2.2.0`, Streamable HTTP |
 | Runtime | Python 3.11 (`python:3.11-slim`), Docker Compose |
 | Retrieval | Structure-aware chunks (~800 char target, 100 overlap), top-4 after per-document dedup |
+| Streaming | `answer_docs` streams tokens as MCP progress notifications. Ollama `stream: true` + `ctx.report_progress()` |
+| Tracing | **planned — LangSmith.** The MCP SDK already emits an OpenTelemetry span per request, but router / retrieval / embedding / generation are one opaque span |
 | Auth | OAuth 2.1 resource server. `TokenVerifier` + `AuthSettings`, scopes `docs:read`. Static bearer tokens — **not** production auth |
 | Auth libs | `mcp.server.auth.*`, `pydantic` `2.13.5`, `httpx2` `2.13.0` (client side) |
 | TLS | Real certificate, terminated by a **Tailscale Funnel** at `<machine>.<tailnet>.ts.net`. Origin is plain HTTP on loopback |

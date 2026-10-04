@@ -95,6 +95,17 @@ exception surfaces as a bare `Error executing tool X` with the traceback in the 
   so it asks Qdrant for `TOP_N` and keeps the best few per document. Four slots is four
   chances to be relevant; without this one long document fills all four with adjacent
   near-duplicates and every other candidate is crowded out.
+- **`@logged` needs an async branch for async tools.** A sync wrapper returns the coroutine
+  object instead of awaiting it, and the failure surfaces far away as
+  `Input should be a valid string ... input_value=<coroutine object>` — at the first string
+  operation, not at the missing `await`.
+- **A client's `progress_callback` must be `async`.** A sync one is never awaited, so
+  `report_progress` raises `object NoneType can't be used in 'await' expression` inside the
+  tool. That one is easy to misread as a server bug.
+- **The blocking tool calls run in a worker thread** via `run_in_executor`, because
+  `rag_service` is synchronous and a 37 s generation inside the event loop would block
+  every other request. `report_progress` is async, so the callback re-enters the loop with
+  `asyncio.run_coroutine_threadsafe`.
 - **Indexing prunes deleted documents** and reports what it removed. One collection holds
   one corpus, so indexing a *different* directory than last time removes the previous
   directory's documents. That is intentional, not a bug.

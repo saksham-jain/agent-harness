@@ -226,11 +226,16 @@ def retrieve(query, k=TOP_K):
     return kept
 
 
-def answer(query):
+def answer(query, on_token=None):
     """Ground an answer in the corpus, or admit nothing was found.
 
     Generation stays in here on purpose: a caller that receives raw chunks has to
     do its own grounding, which is exactly where small models start inventing.
+
+    `on_token` is called with each text fragment as the model produces it. It is the only
+    way a caller can show progress, because generation is a CPU-bound 7B call that takes
+    tens of seconds on a laptop. Streaming is opt-in: with no callback the fragments are
+    joined and the same string is returned as before.
     """
     if not available():
         return (
@@ -240,18 +245,37 @@ def answer(query):
     try:
         hits = retrieve(query)
     except Exception as e:
-        return f"Document search unavailable: {e}"
+        return answer_error(query, e)
 
     if not hits:
-        return (
-            f"No document matched {query!r} above the relevance threshold "
-            f"(MIN_SCORE={MIN_SCORE}). Either the corpus does not cover it, or the "
-            "threshold is too high for this embedding model."
-        )
+        return abstention(query)
 
-    def _label(hit):
-        return hit.payload.get("source") or hit.payload.get("doc_id") or hit.payload.get("file", "?")
+    return answer_from(query, hits, on_token)
 
+
+def abstention(query):
+    """The standard 'the corpus does not cover this' reply."""
+    return (
+        f"No document matched {query!r} above the relevance threshold "
+        f"(MIN_SCORE={MIN_SCORE}). Either the corpus does not cover it, or the "
+        "threshold is too high for this embedding model."
+    )
+
+
+def answer_error(query, e):
+    return f"Document search unavailable: {e}"
+
+
+def _label(hit):
+    return hit.payload.get("source") or hit.payload.get("doc_id") or hit.payload.get("file", "?")
+
+
+def answer_from(query, hits, on_token=None):
+    """Generate a grounded answer from already-retrieved `hits`.
+
+    Split out of `answer()` so a caller that retrieved separately — to report progress in
+    between, say — does not have to retrieve twice.
+    """
     context = "\n\n".join(f"[{i + 1}] ({_label(h)})\n{h.payload['text']}" for i, h in enumerate(hits))
     messages = [
         {
@@ -261,6 +285,21 @@ def answer(query):
         },
         {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {query}"},
     ]
-    resp = llm.chat.completions.create(model=CHAT_MODEL, messages=messages)
+    # Ollama's OpenAI-compatible endpoint streams the same tokens a blocking call would
+    # return, so the callback path is a timing change and not a different model output.
+    # `stream=True` with no callback would be pointless, so only ask for it when someone
+    # is listening.
+    if on_token is None:
+        resp = llm.chat.completions.create(model=CHAT_MODEL, messages=messages)
+        text = resp.choices[0].message.content
+    else:
+        parts = []
+        for chunk in llm.chat.completions.create(model=CHAT_MODEL, messages=messages, stream=True):
+            piece = chunk.choices[0].delta.content or ""
+            if piece:
+                parts.append(piece)
+                on_token(piece)
+        text = "".join(parts)
+
     sources = "\n".join(f"  [{i + 1}] {_label(h)} (score {h.score:.2f})" for i, h in enumerate(hits))
-    return f"{resp.choices[0].message.content}\n\nSources:\n{sources}"
+    return f"{text}\n\nSources:\n{sources}"
