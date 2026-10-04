@@ -80,32 +80,43 @@ The largest thing a user feels. Two protocol features at once:
   live prompt-injection path. Needs delimiting and treating retrieved text as untrusted.
 - `bash` asks `run? [y/N]` — one prompt for every command. Wants allow/deny per tool,
   and a read-only mode for the file tools.
-- **Port 8000 is published on `0.0.0.0`** — the most exposed thing here, and it is live
-  now. Anything that can reach the machine on the LAN can read the corpus. Unpublish the
-  port or bind it to `127.0.0.1`. TLS does not fix this, because a published port is a
-  way *around* TLS.
-- The MCP server binds `0.0.0.0` with DNS-rebinding protection off.
+## 5a. ~~A hostname and a publicly-trusted certificate~~ — done
 
-## 5a. A hostname and a publicly-trusted certificate
+**Shipped.** A Tailscale Funnel on `<machine>.<tailnet>.ts.net`, holding a Let's Encrypt
+certificate. The origin is plain HTTP published as `127.0.0.1:8000`, so the LAN has no
+route in and the old published port is gone.
 
-The blocker for letting anyone but you connect. There are exactly three places a
-certificate can come from, and nothing else is possible:
+Chosen over the alternatives for two reasons worth keeping on file:
 
-| Source | What it costs |
-| --- | --- |
-| Public CA (Caddy, Let's Encrypt) | Own a domain, prove control over DNS, forward ports, renew every 90 days |
-| A tunnel — Tailscale Funnel, Cloudflare | They hold the certificate, you point at their hostname. Usually the best value |
-| Distribute your own CA | What `mkcert` does locally, but every client must install it first |
+- **Free.** Funnel is available on every Tailscale plan including Personal at $0. A
+  Cloudflare *named* tunnel needs a domain (~$10/yr); its *quick* tunnel is free but hands
+  out a random hostname on every restart, which is unusable as a token resource because
+  `MCP_RESOURCE_URL` names the resource a token is issued for.
+- **One URL for everything.** Because the certificate is publicly trusted, local and
+  remote clients dial the same address. That retired the `mkcert` stage entirely — no
+  second port, no CA to install, and the `Caddyfile` was deleted with it.
 
-Two things worth knowing before choosing:
+The `mkcert` path still works if you set `MCP_TLS_CERT` and `MCP_TLS_KEY`; it is just no
+longer the recommended configuration.
 
-- **A local `mkcert` certificate is not a substitute.** It exists only on machines where
-  the CA is installed. Another client gets an untrusted certificate, which they will
-  refuse or, worse, click past.
-- **A tunnel usually makes Caddy unnecessary.** TLS is terminated before traffic reaches
-  the container, so the `Caddyfile` in this repo is only needed on the public-CA path.
+Two operational notes, both learned the hard way:
 
-Whichever route, `MCP_RESOURCE_URL` must be the exact https URL clients connect to — it
+- **`sudo brew services restart tailscale` is the reboot test.** The Funnel config lives in
+  daemon state, not in a process, so it survives — but confirm it rather than assume.
+- **The URL depends on this Mac's name.** `sakshams-macbook-air` comes from LocalHostName.
+  Renaming the Mac changes the hostname, breaking every client and invalidating tokens
+  issued for the old resource URL.
+
+Remaining on the auth side, and these are the real limits:
+
+- **The token table has no expiry and no revocation** short of editing the file and
+  restarting. Possession is identity.
+- **`refresh_index` is a mutation** and every token currently holds `docs:read`, which is
+  all it checks. One token leaked is one leaked corpus *and* one writable index.
+- **Per-tool scopes** are still on the roadmap: split read from write so `refresh_index`
+  needs something a read-only client would not hold.
+
+Whichever route is ever used, `MCP_RESOURCE_URL` must be the exact https URL clients connect to — it
 names which resource a token is issued for, and where discovery lives. Getting it wrong
 shows up as a token that verifies locally and is rejected remotely.
 

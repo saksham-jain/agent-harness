@@ -16,7 +16,7 @@ inference, Qdrant for vectors, MCP between the layers, Docker Compose to run it.
 | Retrieval | 800-char chunks, 100 overlap, top-4 |
 | Auth | OAuth 2.1 resource server. `TokenVerifier` + `AuthSettings`, scopes `docs:read`. Static bearer tokens — **not** production auth |
 | Auth libs | `mcp.server.auth.*`, `pydantic` `2.13.5`, `httpx2` `2.13.0` (client side) |
-| TLS | `mkcert localhost`. Served by the app via uvicorn. Trusted only where its CA is installed, so local use only |
+| TLS | Real certificate, terminated by a **Tailscale Funnel** at `<machine>.<tailnet>.ts.net`. Origin is plain HTTP on loopback |
 | Host protection | `TransportSecuritySettings` — DNS-rebinding. **Off** unless `MCP_ALLOWED_HOSTS` is set |
 
 ## Routing
@@ -113,24 +113,27 @@ call it over HTTP, which is why the "Agent + LLM" box holds the loop, not the mo
 
 ## Auth and TLS
 
-**Status: both working.** Bearer tokens are required, and traffic is encrypted with a
-certificate from `mkcert localhost`, whose CA is installed in the macOS keychain.
+**Status: both working, verified end to end.** Bearer tokens are required on every
+request, and the public name is served by a Tailscale Funnel holding a real Let's Encrypt
+certificate.
 
 ```
-  MCP client ──(Authorization: Bearer <token>)──> https://localhost:8443
-  any client                                       TLS: MCP_TLS_CERT / MCP_TLS_KEY
-        │                                          → /certs/localhost.pem
-        │                                                   │
-        │                                        ──────────┴──> mcp-server :8000
-        │                                                       auth.py verify_token()
-        │                                                         401 if token unknown
-        │                                                         discovery at
-        │                                              /.well-known/oauth-protected-resource/mcp
-        │                                                                  │
-        └────────────────────────── scope check ────────────────────────────┤
-                                                                           ▼
-                                                                   Qdrant :6333
+ any MCP client ──https──> Tailscale          TLS terminates here, real cert for
+        │                    <machine>.<tailnet>.ts.net
+        │                          │
+        │              outbound Funnel — no inbound port,
+        │              no router config
+        │                          │
+        │  Authorization: Bearer <token>
+        └──────────────────────────┴──> 127.0.0.1:8000 ──> mcp-server
+                                        plain HTTP,      auth.py verify_token()
+                                        loopback only    401 if token unknown
 ```
+
+Verified over that path: no token → `401`; valid token → all five tools; discovery
+document's `resource` matching `MCP_RESOURCE_URL` exactly; `answer_docs` returning a
+grounded answer in **3.3s** without the relay truncating it; direct loopback rejected
+with `421`. `curl http://192.168.1.3:8000` refuses — the LAN has no route in.
 
 The server is an OAuth 2.1 **resource server**: it verifies tokens, never issues them.
 `auth.py` implements `TokenVerifier`, one async method — the SDK owns the 401, the
@@ -140,20 +143,24 @@ Enable auth with `MCP_AUTH=1` in `.env`. It is currently a **static token table*
 possession is identity, no expiry, and revocation means editing the file and restarting.
 Fine for a pilot with trusted users, not production auth.
 
-TLS is served by the app itself: `MCPServer.run()` exposes no SSL options, so with a cert
-configured the server builds the ASGI app and hands it to uvicorn. The client trusts the
-certificate through `httpx2`/`truststore` against the OS store, with no `verify=` and no
-CA path in config. With no certificate set, the plain-HTTP path is used unchanged.
+### Why a tunnel rather than a certificate in the container
 
-A certificate generated that way exists only on machines where its CA is installed, so it
-is enough for local use and **not** enough to let anyone else connect. That needs a real
-hostname — a domain or a tunnel. See [AUTH-TLS.md](AUTH-TLS.md).
+A `mkcert` certificate exists only where its CA is installed, so it could never let
+anyone else connect. The Funnel holds a public certificate for the `ts.net` name, which
+means **one URL for everything** — local and remote clients dial the same address, and
+there is no second port and no CA to install.
 
-Two things that cost time to find: `token_verifier` and `auth` must be passed together
-or `MCPServer` raises at construction, and `Client` takes no `headers` argument — a
-bearer token has to go on the HTTP client the transport wraps.
+That also retires the TLS code path. `MCPServer.run()` exposes no SSL options, so
+certificate support meant building the ASGI app and handing it to uvicorn; with TLS
+terminated at the edge, `MCP_TLS_CERT` / `MCP_TLS_KEY` are unset and the origin is plain
+HTTP — safe because it is published as `127.0.0.1:8000` and never leaves the machine.
 
-Plan and what is still missing: **[AUTH-TLS.md](AUTH-TLS.md)**.
+Three things cost time to find: `token_verifier` and `auth` must be passed together or
+`MCPServer` raises at construction; `Client` takes no `headers` argument, so a bearer
+token has to go on the HTTP client the transport wraps; and on port 443 the `Host`
+header carries **no port**, so `MCP_ALLOWED_HOSTS` must list the public hostname bare.
+
+Design, and what is still missing: **[AUTH-TLS.md](AUTH-TLS.md)**.
 Roadmap: **[ENHANCEMENTS.md](ENHANCEMENTS.md)**.
 How the project got here, mistakes included: **[BUILD-JOURNEY.md](BUILD-JOURNEY.md)**.
 Rules for agents and contributors: **[AGENTS.md](AGENTS.md)**.
@@ -274,8 +281,11 @@ WARNING mcp.tools: refresh_index() failed after 120ms: No supported files found 
   `ClientSession` → `Client`, transport options moved to `run()`). Most examples online are v1.
 - **`MCP_TIMEOUT` (default 300s) must cover a whole tool call.** `answer_docs` embeds,
   searches, then generates — ~37s on a 7B model. A 30s budget truncates it mid-answer.
-- **Index from one place.** Paths are the Qdrant payload filter key, so indexing on the
-  host and in the container stores two sets of points for the same files.
+- **Identity is `doc_id`, not the path.** Document identity is the path *relative to the
+  docs directory*, so the same corpus indexed from the host and from a container produces
+  one set of points. Indexing also **prunes** documents that have disappeared — and since
+  a collection holds exactly one corpus, indexing a different directory than last time
+  removes the previous one's documents. That is reported, not silent.
 - **`MIN_SCORE` is a weak signal.** Relevant and irrelevant top-1 scores overlap on this
   corpus (0.59 relevant vs 0.60–0.62 irrelevant), so no threshold separates them. The
   grounding prompt inside `answer_docs` is the actual guardrail. This is why the server
