@@ -53,7 +53,8 @@ saved, so the router is held resident with `keep_alive`.
 ```
 ┌────────────────────────┐
 │      AI Harness        │   agent_harness_base.py
-│     Agent + LLM        │   model loop, local file/shell tools
+│     Agent + LLM        │   the loop + local file/shell tools;
+│                        │   the model itself is the host Ollama box
 └────────────┬───────────┘
              │
 ┌────────────▼───────────┐
@@ -79,6 +80,14 @@ saved, so the router is held resident with `keep_alive`.
 ┌────────────▼───────────┐
 │        Qdrant          │   compose service :6333
 └────────────────────────┘
+
+   called by AI Harness and RAG Service, not chained below Qdrant:
+        ┌────────────────────────┐
+        │       Ollama           │  HOST, not a container
+        │  qwen2.5:7b    chat    │  100% GPU (Metal)
+        │  qwen2.5:1.5b  router  │  served on :11434, reached over
+        │  nomic-embed-text      │  host.docker.internal
+        └────────────────────────┘
 ```
 
 TLS is served by `mcp-server` itself — see **Auth and TLS** below.
@@ -91,12 +100,14 @@ TLS is served by `mcp-server` itself — see **Auth and TLS** below.
 | Auth | `auth.py` | `TokenVerifier` + scope check, between the server and the network |
 | RAG Service | `rag_service.py` | Embedding and retrieval over Qdrant |
 | Corpus | `corpus.py` | File discovery, chunking, batched embedding |
+| Ollama *(host)* | — | Chat, routing decisions, embeddings. **The GPU lives here** |
 | Skills | `skills.py` + `skills/*/SKILL.md` | Playbooks the agent can load on demand |
 | Indexer | `index_docs.py` | Thin CLI over the RAG service |
 | Evals | `evals/` | Labelled cases and the scoring runner |
 
 Each layer only knows the one below it. `rag_service` is testable without any MCP,
-and the harness is usable by any MCP client.
+and the harness is usable by any MCP client. Ollama sits outside the chain — two layers
+call it over HTTP, which is why the "Agent + LLM" box holds the loop, not the model.
 
 **Ollama is not a compose service** — see **Where the GPU is used** below.
 
