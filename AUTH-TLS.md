@@ -27,6 +27,86 @@ as there is a port forward, a tunnel, or a public host.
 Problem 2 is the one that is not obvious: **read-only is not the default here.** Two of
 the four tools mutate or enumerate. Auth is not just about confidentiality.
 
+## How TLS works, and why it needs a hostname
+
+### The problem it solves
+
+The server speaks plain HTTP. Every byte crosses the wire in the clear. Anyone who can
+see the traffic between a client and the server can read the bearer token going past
+and then use it — at which point they are the user. That is the whole problem.
+
+### It does two things, not one
+
+Encryption is the obvious half. The half people miss is authentication:
+
+| | |
+| --- | --- |
+| **Encrypt** | nobody in the middle can read or alter the traffic |
+| **Authenticate** | you are certain you are talking to the real server |
+
+Both are required, and encryption alone is worse than useless. When you connect, the
+other end offers you a key. An attacker in the middle can offer you *their* key
+instead, and you would happily encrypt to them believing you were private — a secret
+conversation with the wrong person. So encryption needs a way to ask: **prove you are
+the server I asked for.**
+
+### The certificate is that proof
+
+A certificate is a signed document saying: *I am `docs.example.com`. I did not write
+this myself — a Certificate Authority did, and it checked that whoever asked actually
+controls that name.*
+
+The CA is the trust anchor. The OS ships with a list of CAs it trusts, so the client
+can check the signature without asking anyone.
+
+### Why a hostname specifically
+
+**The hostname is written into the certificate.** Not metadata — the subject of the
+document. Before sending any real data, the client does this:
+
+1. Server presents its certificate
+2. Is it signed by a CA my OS trusts?
+3. **Does this certificate name the host I just asked for?**
+4. Not expired, not revoked?
+5. All pass → encrypt and talk
+
+Step 3 is where a hostname is mandatory. A certificate for `docs.example.com` is
+worthless when you connect to `something-else.com` — that is exactly the attack it
+exists to stop. An attacker cannot obtain a certificate for your hostname, nor present
+one for *their* domain as though it were you.
+
+And you cannot get one without proving you control the name. That is step 3 working in
+your favour: the CA contacts the domain and checks the requester controls it. Nobody is
+handed a certificate for someone else's name. **Which is why a hostname comes before a
+certificate, and a certificate before HTTPS.**
+
+### What it means here
+
+| Question | Answer |
+| --- | --- |
+| Why is localhost fine? | No certificate exists and none is needed — there is no path to intercept. This is the current state. |
+| Why does it break on a network? | Now there is a path, and a token crossing it in cleartext |
+| Why not self-sign? | Possible, but nothing trusts it. Every client needs a manual "trust this certificate" step, and anyone who skips it gets no protection. |
+
+### Why a tunnel solves it
+
+Doing this yourself means: buy a name, point DNS at the machine, forward ports on the
+router, keep it running, renew certs every 90 days.
+
+A tunnel skips the hard parts. **The tunnel operator already owns a domain and already
+holds the certificate** — it just carries your traffic. Same cryptography, someone else
+holding the name. Not a shortcut around security; security with the operational burden
+handed off.
+
+### What actually changes
+
+Auth is unaffected. TLS is only the outer envelope around it:
+
+```
+now:    client ──plaintext token──> mcp-server :8000    localhost only
+later:  client ──encrypted──> tunnel ──> mcp-server     safe anywhere
+```
+
 ## What the SDK gives us
 
 Checked against the installed `mcp` 2.2.0, not just the docs.
@@ -117,22 +197,68 @@ stop using paths as keys.
 
 ### 4. TLS
 
-TLS terminates at a reverse proxy, not in the Python process. Caddy or nginx in front,
-app bound to `127.0.0.1`, so plaintext never leaves the host.
+Two stages, because they solve different problems and only the first is worth doing now.
 
-```
-:443 ──TLS──> caddy ──http──> mcp-server (127.0.0.1:8000)
+#### Stage 1 — encrypted localhost (do this next)
+
+`mkcert` generates a local Certificate Authority and installs it in the macOS keychain,
+so everything on that machine trusts it automatically. Real encryption, no domain, no
+DNS, no purchase.
+
+```bash
+brew install mkcert && mkcert -install && mkcert localhost
 ```
 
-This is why `resource_server_url` must be the public https URL exactly as clients
-connect: it names which resource a token is for, and where discovery lives.
+Two implementation details that matter:
+
+- **`MCPServer.run()` does not expose SSL options.** It builds its own
+  `uvicorn.Config` with host, port and log level only. Serving TLS from the app means
+  calling `mcp.streamable_http_app(...)` and handing the returned Starlette app to
+  `uvicorn.run()` with `ssl_certfile` / `ssl_keyfile`. Both paths stay available: no cert
+  configured means today's behaviour, unchanged.
+- **The MCP client validates through `httpx2`, which trusts the OS store via
+  `truststore`, not certifi.** So the mkcert CA should be picked up with no client
+  change. If it is not — a minimal container with no CA store is the usual cause — the
+  escape hatch is `SSL_CERT_FILE`/`SSL_CERT_DIR`, or passing `verify=` to the httpx2
+  client that `transport_for()` already builds. Worth asserting rather than assuming.
+
+What this actually buys: loopback traffic is already unreachable from the network, so
+the realistic exposure is *other processes on this machine*. Useful, but it does not
+change the answer for anyone else connecting.
+
+#### Stage 2 — a real hostname (only when someone else connects)
+
+Stage 1 is not a substitute once the server is reachable by anyone but you, because the
+mkcert CA only exists on your machine. Other clients get an untrusted certificate.
+
+The options, and only these three:
+
+| Source | Cost to you |
+| --- | --- |
+| Public CA (Caddy/Let's Encrypt) | Own a real domain, prove control via DNS, forward ports, renew every 90 days |
+| A tunnel (Tailscale Funnel, Cloudflare) | They hold the certificate, you point at their URL |
+| Your own CA, distributed | Same as `mkcert` but every client must install the CA first |
+
+A tunnel is usually the best value: a stable hostname for free, a valid certificate, and
+no router to configure. Caddy is only needed on the public-CA path — with a tunnel, TLS
+is already terminated before it reaches this container, so the `Caddyfile` in this repo
+becomes unnecessary.
+
+```text
+:443 ──TLS──> caddy ──http──> mcp-server (127.0.0.1:8000)     public-CA path
+             tunnel
+:443 ──TLS───────────> mcp-server (:8000)                      tunnel path
+```
+
+Whichever route, `MCP_RESOURCE_URL` must be the exact https URL clients connect to: it
+names which resource a token is for, and where discovery lives.
 
 ### 5. Host allowlist
 
 Turn on what is currently off:
 
 ```python
-transport_security=TransportSecuritySettings(allowed_hosts=["docs.example.com", "localhost:*"])
+transport_security=TransportSecuritySettings(allowed_hosts=["localhost:*", "127.0.0.1:*"])
 ```
 
 Only a few minutes' work, and it closes problem 4 above.
@@ -204,19 +330,20 @@ is `chmod 600`.
 
 ## Order of work
 
-| # | Step | Blocks everything after? |
+| # | Step | State |
 | --- | --- | --- |
-| 1 | TLS proxy + public https URL | yes — `resource_server_url` depends on it |
-| 2 | Host allowlist | no |
-| 3 | Static `TokenVerifier` + `AuthSettings` | no |
-| 4 | Verify: 401 without token, discovery document, token works | — |
-| 5 | `get_access_token()` → tenant resolution | yes, for multi-user |
-| 6 | `doc_id` replacing path keys | yes, for multi-user |
-| 7 | Scope checks per tool — separate read from write | no |
-| 8 | Real JWT / introspection verifier | no |
+| 1 | Static `TokenVerifier` + `AuthSettings` | **done** — 401, identity, scopes all verified |
+| 2 | Host allowlist wiring | **done** — rejects `evil.example.com`; off unless hosts named |
+| 3 | Encrypted localhost via `mkcert` | next, see design section 4 |
+| 4 | Unpublish port 8000, or bind to `127.0.0.1` | **live exposure**, do this regardless of TLS |
+| 5 | A hostname + real certificate | blocks anyone else connecting |
+| 6 | `get_access_token()` → tenant resolution | blocks multi-user |
+| 7 | `doc_id` replacing path keys | blocks multi-user |
+| 8 | Scope checks per tool — split read from write | no |
 
-Steps 1–4 make the server safe to expose to one trusted user. Steps 5–7 are what make
-it safe for many.
+Steps 1–3 leave the server safe for you alone on one machine. Steps 6–7 are what make it
+safe for many users. Step 4 is worth doing now and on its own: a published port is a way
+*around* TLS, so TLS does not close it.
 
 ## What is deliberately not planned
 

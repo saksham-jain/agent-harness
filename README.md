@@ -16,7 +16,7 @@ inference, Qdrant for vectors, MCP between the layers, Docker Compose to run it.
 | Retrieval | 800-char chunks, 100 overlap, top-4 |
 | Auth | OAuth 2.1 resource server. `TokenVerifier` + `AuthSettings`, scopes `docs:read`. Static bearer tokens — **not** production auth |
 | Auth libs | `mcp.server.auth.*`, `pydantic` `2.13.5`, `httpx2` `2.13.0` (client side) |
-| TLS | **not yet.** `Caddyfile` written, never run. Plain HTTP, so tokens are localhost-only |
+| TLS | **not yet.** Plain HTTP, so tokens are localhost-only. `mkcert` plan in [AUTH-TLS.md](AUTH-TLS.md) |
 | Host protection | `TransportSecuritySettings` — DNS-rebinding. **Off** unless `MCP_ALLOWED_HOSTS` is set |
 
 ## Routing
@@ -129,6 +129,11 @@ The server is an OAuth 2.1 **resource server**: it verifies tokens, never issues
 Enable with `MCP_AUTH=1` in `.env`. It is currently a **static token table**: possession
 is identity, no expiry, and revocation means editing the file and restarting. Fine for a
 pilot with trusted users, not production auth.
+
+TLS is deliberately **not** done yet. Auth alone is enough while only you can reach the
+server; TLS only matters at the point someone else can, and it needs a hostname, which
+means a domain or a tunnel. The two-stage plan — encrypted localhost first via
+`mkcert`, a real hostname later — is in [AUTH-TLS.md](AUTH-TLS.md).
 
 Two things that cost time to find: `token_verifier` and `auth` must be passed together
 or `MCPServer` raises at construction, and `Client` takes no `headers` argument — a

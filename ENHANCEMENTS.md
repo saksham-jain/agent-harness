@@ -12,6 +12,9 @@ difficulty.
 | Incremental indexing | done |
 | Grounded answers with citations | done |
 | Small-model routing | done |
+| Auth (bearer tokens) | done, static token table |
+| **TLS** | **not yet** — plaintext, localhost only |
+| **A hostname and a publicly-trusted certificate** | **not yet** — needed before anyone else can connect |
 | **Evaluation** | **nothing** |
 | **Tests** | **none** |
 | **Tracing / spans** | logs only |
@@ -77,7 +80,36 @@ The largest thing a user feels. Two protocol features at once:
   live prompt-injection path. Needs delimiting and treating retrieved text as untrusted.
 - `bash` asks `run? [y/N]` — one prompt for every command. Wants allow/deny per tool,
   and a read-only mode for the file tools.
-- The MCP server binds `0.0.0.0:8000` with no auth and DNS-rebinding protection off.
+- **Port 8000 is published on `0.0.0.0`** — the most exposed thing here, and it is live
+  now. Anything that can reach the machine on the LAN can read the corpus. Unpublish the
+  port or bind it to `127.0.0.1`. TLS does not fix this, because a published port is a
+  way *around* TLS.
+- The MCP server binds `0.0.0.0` with DNS-rebinding protection off.
+
+## 5a. A hostname and a publicly-trusted certificate
+
+The blocker for letting anyone but you connect. There are exactly three places a
+certificate can come from, and nothing else is possible:
+
+| Source | What it costs |
+| --- | --- |
+| Public CA (Caddy, Let's Encrypt) | Own a domain, prove control over DNS, forward ports, renew every 90 days |
+| A tunnel — Tailscale Funnel, Cloudflare | They hold the certificate, you point at their hostname. Usually the best value |
+| Distribute your own CA | What `mkcert` does locally, but every client must install it first |
+
+Two things worth knowing before choosing:
+
+- **A local `mkcert` certificate is not a substitute.** It exists only on machines where
+  the CA is installed. Another client gets an untrusted certificate, which they will
+  refuse or, worse, click past.
+- **A tunnel usually makes Caddy unnecessary.** TLS is terminated before traffic reaches
+  the container, so the `Caddyfile` in this repo is only needed on the public-CA path.
+
+Whichever route, `MCP_RESOURCE_URL` must be the exact https URL clients connect to — it
+names which resource a token is issued for, and where discovery lives. Getting it wrong
+shows up as a token that verifies locally and is rejected remotely.
+
+Design and staging: [AUTH-TLS.md](AUTH-TLS.md).
 
 ## 6. Hybrid search and reranking
 
