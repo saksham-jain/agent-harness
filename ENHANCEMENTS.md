@@ -152,6 +152,28 @@ Two things deliberately not done:
 - **Streaming is opt-in.** `rag_service.answer(query)` with no callback returns the same
   string it always did, byte for byte, so nothing else had to change.
 
+## 4a. The model declines the tool even when told to use it
+
+Shipped as a workaround, and the real fix is still open.
+
+`run_turn` now forces `answer_docs` when the router said `documents` and the model returned
+no tool call. That works, but it treats the symptom: the 7B's system prompt says which tool
+to *prefer* without ever stating the documents **exist**, so it reads a question like "where
+are we going in November?" as unanswerable and says so while the corpus holds the answer.
+
+Measured, direct `chat.completions.create`, three document questions:
+
+| System prompt | Called the tool |
+| --- | --- |
+| Prefers `answer_docs`, does not say the documents exist | 0/3 |
+| Also states they exist | **3/3** |
+| …plus "call it even if you think you know" | 5/5 on document questions, 2/5 on ones that should not retrieve |
+
+So the honest options are: rewrite the system prompt to say the corpus exists and is
+authoritative, and keep enforcement only as a backstop; or drop the router and rely on the
+prompt. Either way the eval now scores `model would call` separately from `routing
+accuracy`, because routing accuracy alone reads `1.00` while the agent is entirely broken.
+
 ## 5. Security
 
 - Document text is embedded into prompts verbatim. A PDF containing instructions is a

@@ -12,6 +12,31 @@ import os
 import threading
 
 
+def _token_from_file():
+    """First token in `tokens.json`, or None.
+
+    Reads the same table the server authenticates against, which removes the need to paste
+    a 44-character secret into `.env` before every run. Two failure modes worth knowing,
+    because both were live during development:
+
+    - a truncated token in `.env` fails auth with no hint about which half is missing
+    - picking a token by position authenticates as whichever subject happens to be first,
+      which silently changes identity when the file is reordered
+
+    Position is acceptable *here* only because every current token is that user's own; the
+    server's `whoami` reports the subject, so a mismatch is visible immediately.
+    """
+    path = os.getenv("MCP_TOKENS_FILE", "tokens.json")
+    try:
+        with open(path) as f:
+            tokens = json.load(f)
+    except (OSError, ValueError):
+        return None
+    for key in tokens:
+        return key
+    return None
+
+
 def transport_for(url):
     """A Streamable HTTP transport, carrying a bearer token if one is configured.
 
@@ -20,7 +45,7 @@ def transport_for(url):
     Returns the URL unchanged when no token is set, so an unauthenticated server is
     left alone.
     """
-    token = os.getenv("MCP_BEARER_TOKEN", "").strip()
+    token = os.getenv("MCP_BEARER_TOKEN", "").strip() or _token_from_file()
     if not token:
         return url
 

@@ -40,12 +40,57 @@ The two error directions are not symmetric, which is the design:
 | | Effect |
 | --- | --- |
 | False negative — needs docs, routed no | `answer_docs` is hidden, so the model cannot search. **Damaging** |
-| False positive — routed yes, did not need | only adds a tool back; the model still chooses. **Harmless** |
+| False positive — routed yes, did not need | one extra retrieval on a question that did not need it |
 
-So it is deliberately permissive and never forces a call. On a labelled set of eight
-questions `qwen2.5:1.5b` scored 6/8 with **no false negatives**; `qwen2.5:0.5b` scored
-4/8 and routed arithmetic to the corpus, so it is not used. Set `ROUTER_MODEL=""` to
-disable routing entirely.
+So the router is deliberately permissive: on a labelled set of eight questions
+`qwen2.5:1.5b` scored 6/8 with **no false negatives**, and `qwen2.5:0.5b` scored 4/8 and
+routed arithmetic to the corpus, so it is not used. Set `ROUTER_MODEL=""` to disable
+routing entirely.
+
+### A correct router is not enough — the router's decision is enforced
+
+Filtering the tool list was the first half, and it turned out not to be sufficient. The
+7B was offered `answer_docs` and **declined to call it**, answering from memory instead:
+
+```
+> when are we going to Hampi?
+[route] documents        ← router correct
+no tool                  ← 7B declines
+```
+
+Reproduced with a direct `chat.completions.create`, outside this codebase entirely, so it
+was never a routing or MCP problem. Measured over three document questions:
+
+| System prompt | Called `answer_docs` |
+| --- | --- |
+| Describes which tool to prefer | **0/3** |
+| Also states the documents exist | **3/3** |
+| …plus "call it even if you think you know" | 5/5 on document questions, but 2/5 on ones that should not retrieve |
+
+The cause is not disobedience. The prompt said *which tool to prefer* without saying the
+documents **existed**, so the model read "where are we going in November?" as unanswerable
+and said so — while `test.md` contained exactly that. For a personal corpus the failure is
+confidently wrong, not visibly wrong.
+
+So when the router says `documents` and the model returns no tool call, the call is made
+anyway:
+
+```
+> when are we going to Hampi?
+[route] documents
+[tool:mcp] answer_docs({'query': 'when are we going to Hampi?'}) (forced: router said documents)
+You are going to visit Hampi in November. [1]
+```
+
+This is the one place the model gets no veto, and it is deliberate: a 1.5B making a binary
+call is more reliable than a 7B deciding whether it needs to act on it. A forced call that
+fails falls back to whatever the model said, so this can never replace a usable answer with
+an error.
+
+The cost is honest — a false-positive route now costs a real retrieval rather than nothing.
+`MIN_SCORE` and the grounding prompt inside `answer_docs` are what stop the extra context
+from becoming a wrong answer, and on this one-document corpus that path abstains
+correctly.
 
 Pinning matters. An unloaded model costs **~12s** to load, which would dwarf the 0.7s
 saved, so the router is held resident with `keep_alive`.
@@ -262,6 +307,11 @@ the citations resolve.
 `cases.json` holds two sets. `cases` is a **tuning set**: the router prompt was last
 changed against it, so its score is optimistic. `holdout` was written afterwards and is
 never tuned against — that is the number to trust, and it is what the exit code gates on.
+
+`routing accuracy` and `model would call` are reported separately on purpose. Routing alone
+is not enough: it read **1.00** while the agent was completely broken, because the router was
+right every time and the 7B ignored it. The second column asks whether the model would
+actually call the tool given that decision, which is the thing that failed.
 
 ## Logs
 
