@@ -61,18 +61,96 @@ async def test_index_status() -> None:
 
 `rag_service` is already free of MCP imports, so it tests the same way.
 
-## 3. Tracing
+## 3. Tracing — do this next
 
-OpenTelemetry is **on by default** in the MCP SDK — every request already gets a
-server span. Exporting one is a few lines of config. Latency is currently invisible
-except in log text, and the interesting number (37s) is invisible entirely.
+Now the highest-value item. `answer_docs` streams, so you can see *when* generation starts,
+but nothing records *where the time went* across a turn: router call, retrieval, embedding,
+generation, each tool's share. The 37 s figure in the docs is one measurement on one
+question, not a breakdown.
 
-## 4. Streaming and progress
+**Yes, LangSmith** is the intended tool here, and it is a good fit for three specific
+reasons:
 
-The largest thing a user feels. Two protocol features at once:
+- **No rewrite.** It traces the loop that already exists in ~20 lines. LangChain's
+  `create_agent()` is not involved and is not wanted — the router gate filters the tool list
+  *before* the turn, which is a pre-filter rather than an agent-loop feature, so adopting a
+  framework to get tracing would mean rewriting the part that works.
+- **It covers the whole turn, not just MCP.** The MCP SDK already emits an OpenTelemetry
+  span per request, so the transport is traced. What is invisible is the *inside*: which of
+  router / retrieval / embedding / generation spent the 37 s. LangSmith wraps all of it and
+  gives a shareable link per run.
+- **There is nothing else to measure against.** Zero tests, one 65-byte document, and
+  `recall@4 = 0.00`. Tracing is how you find out what a change actually did rather than
+  inferring it from one log line.
 
-- Ollama `stream: true`, so tokens arrive as generated
-- MCP `ctx.report_progress()`, so the client can show progress during a tool call
+Free tier is enough for a solo project. It needs an account and `LANGCHAIN_TRACING_V2=true`
+plus an API key in `.env`.
+
+## 3a. LangGraph — the use case that would justify it
+
+Not now, and not because it is a worse tool. **LangGraph is the right answer to a problem
+this project does not have yet**, and adding it earlier would be learning the framework
+rather than fixing something.
+
+The current turn is linear:
+
+```
+classify → filter tools → LLM turn → dispatch → repeat
+```
+
+LangGraph earns its keep when the turn is a graph with branching and cycles. The honest
+candidate here is a **multi-step research agent** — one that decomposes a question, gathers
+from several sources, checks its own work, and retries what failed:
+
+```
+              ┌──────────────┐
+              │ route intent │
+              └──────┬───────┘
+        ┌─────────────┴─────────────┐
+   needs documents              needs to compute
+        │                             │
+    retrieve                     sandbox exec ──┐
+        │                             │  fail   │
+        └──────────────┬──────────────┴─────────┘
+                       │        retry (max 2)
+                  ┌────▼─────┐
+                  │  enough? │──no──► back to retrieve
+                  └────┬─────┘
+                       yes
+                  ┌────▼─────┐
+                  │synthesise│  cite every source
+                  └──────────┘
+```
+
+That is branching (documents vs compute), a cycle (retrieve → check → retry), and per-node
+state. Three things come with it that the loop cannot give:
+
+| Capability | Why it needs a graph |
+|---|---|
+| **Checkpointing** | A run is 5+ LLM calls and 90 s. If call 4 fails, resume from call 4 instead of paying for 1–3 again — and Ollama reloads are ~12 s each |
+| **Named nodes you can trace** | Per-step traces for a multi-step run, not one opaque turn |
+| **Per-node retry policy** | A failed retrieval and a failed sandbox exec want different handling; a flat `try/except` cannot express that |
+
+So: **LangSmith now, for visibility. LangGraph later, when there is a research agent to
+checkpoint.** They are independent — LangSmith traces whatever loop you have, graph or not.
+
+## 4. ~~Streaming and progress~~ — done
+
+`answer_docs` now streams. Ollama's `stream: true` yields tokens as generated, and
+`ctx.report_progress()` carries each one to the client as an MCP progress notification —
+so a client that asks for progress sees a moving indicator instead of a frozen call.
+
+Measured through the tunnel: retrieval reported at **0.01s**, first token at **2.84s**, 14
+notifications, done in **4.0s**. Both phases report separately because retrieval is quick
+and generation is not.
+
+Two things deliberately not done:
+
+- **The token text goes in the progress `message`, truncated to 60 chars**, and the final
+  result still carries the whole answer. Streaming the full text twice would double the
+  payload for no gain.
+- **Streaming is opt-in.** `rag_service.answer(query)` with no callback returns the same
+  string it always did, byte for byte, so nothing else had to change.
 
 ## 5. Security
 
