@@ -80,6 +80,12 @@ exception surfaces as a bare `Error executing tool X` with the traceback in the 
   rejects every request.
 - **`Answer` latency is ~17–37s**, dominated by a CPU-bound 7B generation. Budget per tool
   call, not per turn. `MCP_TIMEOUT` must cover a whole call.
+- **Document identity is `doc_id`**, the path relative to the docs directory — never the
+  absolute path. Absolute paths as keys are what made host and container indexing produce
+  two sets of points.
+- **Indexing prunes deleted documents** and reports what it removed. One collection holds
+  one corpus, so indexing a *different* directory than last time removes the previous
+  directory's documents. That is intentional, not a bug.
 - **Port 8000 is published on `0.0.0.0`.** Anything on the LAN can reach the server. TLS
   does not close this — a published port is a way *around* TLS.
 
