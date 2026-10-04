@@ -98,8 +98,7 @@ TLS is served by `mcp-server` itself — see **Auth and TLS** below.
 Each layer only knows the one below it. `rag_service` is testable without any MCP,
 and the harness is usable by any MCP client.
 
-**Ollama is not a compose service** — Metal acceleration needs it on the Mac, so the
-containers reach it over `host.docker.internal:11434`.
+**Ollama is not a compose service** — see **Where the GPU is used** below.
 
 ## Auth and TLS
 
@@ -147,6 +146,40 @@ Plan and what is still missing: **[AUTH-TLS.md](AUTH-TLS.md)**.
 Roadmap: **[ENHANCEMENTS.md](ENHANCEMENTS.md)**.
 How the project got here, mistakes included: **[BUILD-JOURNEY.md](BUILD-JOURNEY.md)**.
 Rules for agents and contributors: **[AGENTS.md](AGENTS.md)**.
+
+## Where the GPU is used
+
+**Only on the host. The containers have no GPU and never will.**
+
+```
+┌── host ─────────────────────────────────────────────┐
+│  Ollama ──> Apple M1 GPU (Metal 4)      ✅ 100% GPU │
+│    ▲                                           │
+│    │  HTTP, host.docker.internal:11434          │
+│  ┌─┴───────────────────────────────┐            │
+│  │ mcp-server   172.20.0.3         │  ❌ no GPU  │
+│  │ qdrant                          │  ❌ no GPU  │
+│  └─────────────────────────────────┘            │
+└──────────────────────────────────────────────────┘
+```
+
+Verified inside the container: neither `/dev/dri` nor `Metal.framework` exists.
+
+Docker Desktop runs containers in a Linux VM with no GPU passthrough, and Metal cannot be
+exposed to a Linux guest. On Linux with NVIDIA you would add
+`deploy.resources.reservations.devices`; there is no macOS equivalent. Containerising
+Ollama would silently drop it to CPU — still working, just several times slower, with
+nothing to warn you.
+
+The containers are not idle, they just don't run models: protocol, auth, orchestration and
+vector search. Search over a few hundred vectors is microseconds of CPU, and Qdrant's CPU
+HNSW is the right tool at this scale.
+
+That is why the network hop is invisible — **~0.2 ms against a 37-second generation.**
+
+**Memory is shared.** Apple Silicon has one pool for CPU and GPU, so on 16 GB a resident 7B
+plus Qdrant plus containers is tight. A container that dies with `exit 137` was SIGKILLed,
+almost always by the OOM killer — check `docker compose ps -a` before assuming a code fault.
 
 ## Run
 
