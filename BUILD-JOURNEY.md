@@ -177,6 +177,9 @@ HTTP header, so stdio and the in-process `Client(mcp)` never see auth — a test
 | 30s MCP timeout vs a 37s tool | Every document call timed out |
 | Two eval defects under an all-1.00 run | The harness was measuring the wrong thing |
 | Duplicated layer table in the README | Caught only by auditing before a commit |
+| Diagnosed a "duplicate point" as a `_stored_hash` bug | It read `None` only because I had scrolled with `with_payload=['doc_id','source']`, so Qdrant returned nothing for `hash`. The real cause was a stale `index` image |
+| Ran `docker compose build` and assumed every service was rebuilt | Per-service images. `agent_harness-index` stayed two days old and kept writing pre-`doc_id` payloads, so host and container runs pruned each other on every pass |
+| Treated `#` headings as chunk boundaries everywhere | Produced 32 chunks of ~76 chars from a 2.4 KB file. Only `# ` is a document boundary; `##` sections pack together, since the heading text stays in the chunk |
 | Published two host ports that were identical | Read the config, not the traffic. Both were TLS; the "http on 8000, https on 8443" comment described a distinction that did not exist |
 | Basename fallback when handling legacy points | Kept a duplicate of a live document. The reasoning was wrong: a run either writes a modern point or finds one already there, so a legacy key is always redundant |
 | `tailscale funnel --bg 443 <url>` | The port is a flag. It failed with `invalid argument format` while looking plausible |
@@ -193,6 +196,7 @@ HTTP header, so stdio and the in-process `Client(mcp)` never see auth — a test
 | LAN exposure | **done** — `127.0.0.1:8000:8000`; `192.168.1.3:8000` refuses |
 | Tests | Zero, though evals exist |
 | Corpus | One 65-byte file, so retrieval numbers are an anecdote |
+| Retrieval at scale | `top-4` now dedupes across documents and chunks follow structure, but nothing has been measured above ~10 documents yet |
 | Prompt injection | Document text enters prompts unescaped |
 | Real auth | Static table: no expiry, revocation needs a restart |
 | Per-tool scopes | `refresh_index` is a mutation and every token holds `docs:read` |
