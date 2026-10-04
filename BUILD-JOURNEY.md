@@ -174,8 +174,8 @@ HTTP header, so stdio and the in-process `Client(mcp)` never see auth — a test
 | --- | --- |
 | **Port 8000 published on `0.0.0.0`** | Live now. TLS does not close it — a published port is a way *around* TLS |
 | Multi-tenancy | Every tenant shares one collection |
-| Document identity | Still keyed by filesystem path |
-| Stale index points | Removed documents are never purged |
+| Document identity | **done** — `doc_id` is now relative to the docs directory |
+| Index pruning | **done** — removed documents are pruned and reported |
 | Tests | Zero, though evals exist |
 | Corpus | One 65-byte file, so retrieval numbers are an anecdote |
 | Prompt injection | Document text enters prompts unescaped |

@@ -109,7 +109,8 @@ def list_docs() -> list[DocInfo]:
     """List the documents currently in the index, with how many chunks each has."""
     if not rag_service.available():
         raise ToolError(f"No index found (collection {rag_service.COLLECTION!r}). Run the indexer first.")
-    return [DocInfo(file=path, chunks=n) for path, n in rag_service.list_docs().items()]
+    counts, sources = rag_service.list_docs()
+    return [DocInfo(file=sources.get(d, d), chunks=n) for d, n in counts.items()]
 
 
 @mcp.tool(title="Re-index the documents")
