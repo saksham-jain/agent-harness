@@ -1,0 +1,19 @@
+{
+  "_comment": [
+    "Copy to tokens.json and fill in. NEVER commit the real file.",
+    "Each key is a bearer token; the value says who it belongs to and what it may do.",
+    "Scopes are checked by the SDK against MCP_REQUIRED_SCOPES on every request, so a",
+    "token missing the required scope is rejected before any tool runs.",
+    "Generate with: python3 -c \"import secrets; print(secrets.token_urlsafe(32))\""
+  ],
+  "tok_replace_me_saksham": {
+    "subject": "saksham",
+    "client_id": "claude-code",
+    "scopes": ["docs:read"]
+  },
+  "tok_replace_me_bob": {
+    "subject": "bob",
+    "client_id": "claude-code",
+    "scopes": ["docs:read"]
+  }
+}
