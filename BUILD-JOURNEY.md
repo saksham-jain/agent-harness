@@ -151,6 +151,16 @@ then worked with no client change at all.
 
 Serving it needed bypassing `run()` entirely, since it exposes no SSL options.
 
+Then the hostname, via a Tailscale Funnel. The mkcert stage turned out to be unnecessary
+the moment that landed: a publicly-trusted certificate means one URL for local and remote
+clients, so there is no second port and no CA to install. The tunnel cost nothing —
+Funnel is on every Tailscale plan including the free Personal one — and the `Caddyfile`
+was deleted rather than maintained for a path nobody would take.
+
+The saving was noticing the free option first. Cloudflare's named tunnel needs a domain
+and its quick tunnel changes hostname on every restart, which is unusable when
+`MCP_RESOURCE_URL` names the resource a token is issued for.
+
 **Learned:** prove the trust assumption before building on it. And `Authorization` is an
 HTTP header, so stdio and the in-process `Client(mcp)` never see auth — a test using
 `Client(mcp)` proves nothing about authentication. Full design and the measured handshake:
@@ -167,20 +177,40 @@ HTTP header, so stdio and the in-process `Client(mcp)` never see auth — a test
 | 30s MCP timeout vs a 37s tool | Every document call timed out |
 | Two eval defects under an all-1.00 run | The harness was measuring the wrong thing |
 | Duplicated layer table in the README | Caught only by auditing before a commit |
+| Published two host ports that were identical | Read the config, not the traffic. Both were TLS; the "http on 8000, https on 8443" comment described a distinction that did not exist |
+| Basename fallback when handling legacy points | Kept a duplicate of a live document. The reasoning was wrong: a run either writes a modern point or finds one already there, so a legacy key is always redundant |
+| `tailscale funnel --bg 443 <url>` | The port is a flag. It failed with `invalid argument format` while looking plausible |
+| Raw `curl` for `tools/list` returned `Missing session ID` | Streamable HTTP needs an `initialize` handshake first. The tunnel was fine; the test was wrong |
 
 ## What is still open
 
 | | |
 | --- | --- |
-| **Port 8000 published on `0.0.0.0`** | Live now. TLS does not close it — a published port is a way *around* TLS |
 | Multi-tenancy | Every tenant shares one collection |
 | Document identity | **done** — `doc_id` is now relative to the docs directory |
 | Index pruning | **done** — removed documents are pruned and reported |
+| Public hostname + real certificate | **done** — Tailscale Funnel, Let's Encrypt |
+| LAN exposure | **done** — `127.0.0.1:8000:8000`; `192.168.1.3:8000` refuses |
 | Tests | Zero, though evals exist |
 | Corpus | One 65-byte file, so retrieval numbers are an anecdote |
 | Prompt injection | Document text enters prompts unescaped |
 | Real auth | Static table: no expiry, revocation needs a restart |
-| Public hostname | Needed before anyone else can connect |
+| Per-tool scopes | `refresh_index` is a mutation and every token holds `docs:read` |
+
+### The exposure that outlived TLS
+
+The port was published on `0.0.0.0` while TLS was being set up, and adding TLS did not
+close it — a published port is a way *around* TLS. Worse, the instinct was to treat
+encryption and exposure as one problem, so the port stayed open across the whole TLS
+stage and only got noticed when hostname work began.
+
+What fixed it was not a security argument but a routing one. Once the tunnel existed, the
+public path went through Tailscale on the host, which can reach `127.0.0.1`. The LAN
+listener stopped having a purpose, so binding it to loopback was the obvious change
+rather than a defensive one. Two problems, one move.
+
+The habit worth keeping: **a port is exposure regardless of what else is protecting
+it.** Encryption is not a reason to leave a listener open.
 
 ## Reading
 

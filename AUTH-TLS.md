@@ -1,12 +1,22 @@
 # Auth + TLS
 
-Design and working notes. **Auth and stage-1 TLS are implemented and verified.** Stage 2 —
-a real hostname — is not, and is the only part left.
+Design and working notes. **Auth, the hostname, and the LAN exposure fix are implemented
+and verified.** What remains is the auth *model*, not the transport: a static token table
+with no expiry, and no per-tool scopes.
 
-## Why this is needed
+The current shape:
 
-The MCP server is meant to be reachable by MCP clients over the network. Today anything
-that can reach port 8000 gets full access. Verified, not assumed:
+| | |
+| --- | --- |
+| Public name | `https://sakshams-macbook-air.tailf61e07.ts.net/mcp` |
+| Certificate | Let's Encrypt, auto-renewed, 90 days |
+| Transport | Tailscale Funnel; TLS terminates at the edge |
+| Origin | plain HTTP on `127.0.0.1:8000`, no LAN route |
+| Auth | static bearer tokens, `docs:read` |
+
+## Why this was needed
+
+Originally, anything that could reach port 8000 got full access. Verified, not assumed:
 
 ```
 no credentials of any kind -> ['answer_docs', 'list_docs', 'refresh_index', 'index_status']
@@ -22,8 +32,8 @@ Zero credentials retrieved the corpus. Four concrete exposures:
 | 3 | **Plain HTTP** | Bearer tokens would cross the network in cleartext. Most MCP clients require https for a remote host |
 | 4 | **DNS-rebinding protection off** | The SDK defaults `TransportSecuritySettings(enable_dns_rebinding_protection=False)` for backwards compatibility. A browser on a user's machine could be made to talk to the local instance |
 
-Docker publishes `8000:8000` on all interfaces (`0.0.0.0`), so this is exposed as soon
-as there is a port forward, a tunnel, or a public host.
+Docker now publishes `127.0.0.1:8000:8000` — loopback only. The public path is the
+Tailscale Funnel, which dials loopback from the host, so the LAN has no route in.
 
 Problem 2 is the one that is not obvious: **read-only is not the default here.** Two of
 the four tools mutate or enumerate. Auth is not just about confidentiality.
@@ -200,7 +210,7 @@ stop using paths as keys.
 
 Two stages, because they solve different problems and only the first is worth doing now.
 
-#### Stage 1 — encrypted localhost (done)
+#### Stage 1 — encrypted localhost (done, then retired)
 
 `mkcert` generates a local Certificate Authority and installs it in the macOS keychain,
 so everything on that machine trusts it automatically. Real encryption, no domain, no
@@ -210,9 +220,18 @@ DNS, no purchase.
 brew install mkcert && mkcert -install && mkcert localhost
 ```
 
+**Retired.** The Funnel holds a real public certificate, so there is one URL for local
+and remote clients and no CA to install. `MCP_TLS_CERT` / `MCP_TLS_KEY` are now unset and
+the origin is plain HTTP on loopback. Set both to bring this path back for a pure-local
+setup with no tunnel — the code still supports it. The handshake below is kept because it
+is the clearest statement of what the TLS path actually does.
+
 #### What the handshake actually looks like
 
-Measured against the running server with `openssl s_client -connect localhost:8443`.
+Measured while this path was live, with `openssl s_client -connect localhost:8443`. It is
+kept as the clearest statement of what the in-container TLS branch does — which still
+exists, and is what you get back by setting `MCP_TLS_CERT` and `MCP_TLS_KEY`. The
+8443 mapping itself is gone; the current public path is in **Stage 2** below.
 This is the real exchange, not a textbook sketch:
 
 ```
@@ -254,10 +273,16 @@ Two details that surprise people:
   `Verify return code: 21 (unable to verify the first certificate)` and that is
   *correct* — the client already trusts the CA through the keychain, so the chain does not
   need sending. `curl` and `httpx2` both verify, because they consult the OS store.
-- **TLS terminates inside the container.** Docker maps host `8443` to container `8000`,
-  and uvicorn does the handshake there. The bearer token in step 5 is encrypted before it
-  leaves the container — but the plain-HTTP port 8000 is a *separate* connection with no
-  TLS at all, which is why publishing that port remains the live exposure.
+- **Where TLS terminates is a deployment choice, not a property of the server.** It used to
+  be inside the container, with Docker mapping host `8443` to container `8000` and uvicorn
+  doing the handshake. The bearer token in step 5 was encrypted before it left the
+  container — but that left a *second*, plain-HTTP connection on host port `8000` with no
+  TLS at all, which is exactly why a published port was a way around the encryption.
+
+  With the Funnel, TLS terminates at Tailscale and the origin is plain HTTP — safe only
+  because it is published as `127.0.0.1:8000` and has no route off the machine. The lesson
+  is not "put TLS in the container"; it is that **a listener is an exposure regardless of
+  what protects the traffic reaching it.**
 
 Two implementation details that mattered:
 
@@ -276,32 +301,75 @@ What this buys: loopback traffic is already unreachable from the network, so the
 realistic exposure is *other processes on this machine*. Useful, but it does not change
 the answer for anyone else connecting.
 
-#### Stage 2 — a real hostname (only when someone else connects)
+#### Stage 2 — a real hostname (done)
 
-Stage 1 is not a substitute once the server is reachable by anyone but you, because the
-mkcert CA only exists on your machine. Other clients get an untrusted certificate.
+Stage 1 could never be enough: the mkcert CA exists only on this machine, so any other
+client got an untrusted certificate.
 
-The options, and only these three:
+The options were a public CA, a tunnel, or distributing your own CA. **A tunnel won**,
+because TLS is terminated before traffic reaches the container, which also made stage 1
+unnecessary.
 
-| Source | Cost to you |
-| --- | --- |
-| Public CA (Caddy/Let's Encrypt) | Own a real domain, prove control via DNS, forward ports, renew every 90 days |
-| A tunnel (Tailscale Funnel, Cloudflare) | They hold the certificate, you point at their URL |
-| Your own CA, distributed | Same as `mkcert` but every client must install the CA first |
-
-A tunnel is usually the best value: a stable hostname for free, a valid certificate, and
-no router to configure. Caddy is only needed on the public-CA path — with a tunnel, TLS
-is already terminated before it reaches this container, so the `Caddyfile` in this repo
-becomes unnecessary.
-
-```text
-:443 ──TLS──> caddy ──http──> mcp-server (127.0.0.1:8000)     public-CA path
-             tunnel
-:443 ──TLS───────────> mcp-server (:8000)                      tunnel path
+```bash
+brew install tailscale
+sudo brew services start tailscale      # RunAtLoad + KeepAlive
+tailscale up                            # browser login
+tailscale funnel --bg --https=443 http://127.0.0.1:8000
 ```
 
-Whichever route, `MCP_RESOURCE_URL` must be the exact https URL clients connect to: it
-names which resource a token is for, and where discovery lives.
+**Free on every Tailscale plan, including Personal at $0** — that decided it. Cloudflare's
+named tunnel needs a domain (~$10/yr) and its quick tunnel hands out a *random hostname
+that changes on every restart*, which is unusable as a token resource.
+
+Two things cost time:
+
+- **The port is a flag, not a positional.** `--https=443`, not `funnel --bg 443 http://…`.
+- **It stores nothing until you click a link.** The first run prints
+  `login.tailscale.com/f/funnel?node=…` and `funnel status` keeps reporting
+  `No serve config` until that page is visited.
+
+On macOS this needs the Homebrew CLI — the App Store app does not ship the binary Funnel
+requires.
+
+**The `Caddyfile` was deleted.** It only ever applied to the public-CA path.
+
+##### What the tunnel verified
+
+```
+subject=CN=sakshams-macbook-air.tailf61e07.ts.net
+issuer=C=US, O=Let's Encrypt, CN=YE1
+notBefore=Oct  4 14:57:07 2026 GMT
+notAfter=Jan  2 14:57:06 2027 GMT
+```
+
+| Check | Result |
+| --- | --- |
+| Real certificate for the public name | Let's Encrypt, 90 days, auto-renewed |
+| No token | `401` |
+| Valid token | all five tools |
+| Discovery document | `resource` matches `MCP_RESOURCE_URL` exactly |
+| `answer_docs` over the tunnel | **3.3s** warm, grounded answer, score 0.74 |
+| Does the Funnel preserve `Host`? | **Yes** — proved by allowing only the public name |
+| Direct loopback with a valid token | `421`, DNS-rebinding protection working |
+| Survives `brew services restart` | **Yes** — config is daemon state, not a process |
+
+That `answer_docs` number is the one worth having. The relay did not truncate a
+multi-second generation, which was the open risk.
+
+##### The URL is stable — with one dependency
+
+`LocalHostName` gives the first label, the tailnet fixes the rest:
+
+```
+sakshams-macbook-air . tailf61e07 . ts.net
+└── this Mac's name     └── fixed at tailnet creation
+```
+
+Renaming the Mac changes the URL, which breaks every client *and* invalidates tokens
+issued for the old resource URL, because `MCP_RESOURCE_URL` names the resource.
+
+Whichever route is ever used, `MCP_RESOURCE_URL` must be the exact https URL clients
+connect to: it names which resource a token is for, and where discovery lives.
 
 ### 5. Host allowlist
 
@@ -385,15 +453,17 @@ is `chmod 600`.
 | 1 | Static `TokenVerifier` + `AuthSettings` | **done** — 401, identity, scopes all verified |
 | 2 | Host allowlist wiring | **done** — rejects `evil.example.com`; off unless hosts named |
 | 3 | Encrypted localhost via `mkcert` | **done** — TLS served by uvicorn from the ASGI app |
-| 4 | Unpublish port 8000, or bind to `127.0.0.1` | **live exposure**, do this regardless of TLS |
-| 5 | A hostname + real certificate | blocks anyone else connecting |
+| 4 | Unpublish port 8000, or bind to `127.0.0.1` | **done** — `127.0.0.1:8000:8000`; `192.168.1.3:8000` refuses |
+| 5 | A hostname + real certificate | **done** — Tailscale Funnel, Let's Encrypt cert |
 | 6 | `get_access_token()` → tenant resolution | blocks multi-user |
-| 7 | `doc_id` replacing path keys | blocks multi-user |
+| 7 | `doc_id` replacing path keys | **done** — relative to the docs directory |
 | 8 | Scope checks per tool — split read from write | no |
 
-Steps 1–3 leave the server safe for you alone on one machine. Steps 6–7 are what make it
-safe for many users. Step 4 is worth doing now and on its own: a published port is a way
-*around* TLS, so TLS does not close it.
+Steps 1–5 leave the server safe on one machine and reachable by name. Steps 6 and 8 are
+what make it safe for many users. Two of the four original problems were only ever
+*partly* fixed and should not be read as closed: `refresh_index` is still a mutation
+guarded only by a scope that every current token holds, and the token table still has no
+expiry.
 
 ## What is deliberately not planned
 
@@ -405,27 +475,47 @@ safe for many users. Step 4 is worth doing now and on its own: a published port 
 
 ## Verify it
 
+Ask for a token by subject, not by position, then use the real client — Streamable HTTP
+needs an `initialize` handshake before `tools/list`, so a hand-written `curl` returns
+`Missing session ID` and looks like a failure when it is not.
+
 ```bash
+export MCP_BEARER_TOKEN=$(../.venv/bin/python3 -c "
+import json; t = json.load(open('tokens.json'))
+print(next(k for k, v in t.items() if v['subject'] == 'saksham'))")
+export MCP_URL=https://sakshams-macbook-air.tailf61e07.ts.net/mcp
+
 # no token -> 401 with a WWW-Authenticate pointer
-curl -i https://docs.example.com/mcp -X POST \
+curl -s -o /dev/null -w '%{http_code}\n' -X POST $MCP_URL \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 
-# discovery document, no auth needed
-curl -s https://docs.example.com/.well-known/oauth-protected-resource/mcp
+# discovery, no auth needed; `resource` must equal MCP_RESOURCE_URL exactly
+curl -s $HOST/.well-known/oauth-protected-resource/mcp
 
-# with a token -> tools list
-curl -s https://docs.example.com/mcp -X POST \
-  -H 'Authorization: Bearer tok_saksham' \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
-
-# client side: MCP_BEARER_TOKEN is read by mcp_client.transport_for()
-export MCP_BEARER_TOKEN=tok_saksham
-python3 agent_harness_base.py
+# the real path: handshake, tools, and a grounded answer
+MCP_BEARER_TOKEN=$MCP_BEARER_TOKEN ../.venv/bin/python3 -c "
+import anyio, mcp_client, time, os
+from mcp import Client
+async def main():
+    async with Client(mcp_client.transport_for(os.environ['MCP_URL'])) as c:
+        print([t.name for t in (await c.list_tools()).tools])
+        t0 = time.perf_counter()
+        r = await c.call_tool('answer_docs', {'query': 'how long is the hotel booked for?'})
+        print(f'{time.perf_counter() - t0:.1f}s', r.content[0].text[:80])
+anyio.run(main)"
 ```
+
+Also worth checking after a reboot, since the Funnel config lives in daemon state rather
+than in a process:
+
+```bash
+sudo brew services restart tailscale && sleep 5
+tailscale funnel status          # config still there?
+```
+
+`curl` to `192.168.1.3:8000` must refuse — that is the loopback binding doing its job.
 
 `Authorization` is an HTTP header, so **stdio and the in-process `Client(mcp)` used in
 tests never see any of this.** A test that passes locally proves nothing about auth; it

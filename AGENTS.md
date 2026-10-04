@@ -86,8 +86,21 @@ exception surfaces as a bare `Error executing tool X` with the traceback in the 
 - **Indexing prunes deleted documents** and reports what it removed. One collection holds
   one corpus, so indexing a *different* directory than last time removes the previous
   directory's documents. That is intentional, not a bug.
-- **Port 8000 is published on `0.0.0.0`.** Anything on the LAN can reach the server. TLS
-  does not close this — a published port is a way *around* TLS.
+- **Port 8000 is published as `127.0.0.1` only.** The public path is the Tailscale Funnel,
+  which runs on the host and dials loopback. Publishing on `0.0.0.0` would be a way
+  *around* TLS, so it is not done.
+- **`MCP_ALLOWED_HOSTS` lists the public hostname bare — no port.** On 443 the `Host`
+  header omits the port. Adding `:443` does not match. The Funnel forwards the original
+  `Host`, so that one entry covers tunnel traffic; direct loopback is rejected with 421.
+- **The Funnel URL is stable, and depends on the Mac's name.** `sakshams-macbook-air` comes
+  from LocalHostName and `tailf61e07` is fixed at tailnet creation. Renaming the Mac
+  changes the URL, which breaks every client *and* invalidates tokens issued for the old
+  resource URL.
+- **Enabling the Funnel needs one admin click.** `tailscale funnel` prints a
+  `login.tailscale.com/f/funnel?node=…` URL and stores nothing until it is visited. The
+  port is a flag, not a positional: `tailscale funnel --bg --https=443 http://127.0.0.1:8000`.
+- **On macOS use the Homebrew CLI, not the App Store app.** Funnel needs the open-source
+  variant; `brew services start tailscale` also gives `RunAtLoad` + `KeepAlive`.
 
 ## Commands
 
@@ -95,6 +108,10 @@ exception surfaces as a bare `Error executing tool X` with the traceback in the 
 docker compose up -d                                  # qdrant + mcp-server
 docker compose --profile index run --rm index         # index docs
 docker compose --profile client run --rm mcp-client   # the agent
+
+tailscale funnel --bg --https=443 http://127.0.0.1:8000   # (re)publish the hostname
+tailscale funnel status                                  # is it up?
+tailscale funnel --https=443 off                         # take it down
 
 ../.venv/bin/python3 evals/run.py --fast              # retrieval + routing, seconds
 ../.venv/bin/python3 evals/run.py --full              # also grades answers, slow
