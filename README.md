@@ -13,7 +13,7 @@ inference, Qdrant for vectors, MCP between the layers, Docker Compose to run it.
 | Vector DB | Qdrant `1.19.1`, 768-dim Cosine, collection `rag_nomic_embed_text` |
 | Protocol | MCP Python SDK `2.2.0`, Streamable HTTP |
 | Runtime | Python 3.11 (`python:3.11-slim`), Docker Compose |
-| Retrieval | 800-char chunks, 100 overlap, top-4 |
+| Retrieval | Structure-aware chunks (~800 char target, 100 overlap), top-4 after per-document dedup |
 | Auth | OAuth 2.1 resource server. `TokenVerifier` + `AuthSettings`, scopes `docs:read`. Static bearer tokens — **not** production auth |
 | Auth libs | `mcp.server.auth.*`, `pydantic` `2.13.5`, `httpx2` `2.13.0` (client side) |
 | TLS | Real certificate, terminated by a **Tailscale Funnel** at `<machine>.<tailnet>.ts.net`. Origin is plain HTTP on loopback |
@@ -286,6 +286,11 @@ WARNING mcp.tools: refresh_index() failed after 120ms: No supported files found 
   one set of points. Indexing also **prunes** documents that have disappeared — and since
   a collection holds exactly one corpus, indexing a different directory than last time
   removes the previous one's documents. That is reported, not silent.
+- **`top-4` is deduped, not raw.** Four slots is four chances to be relevant, so `retrieve()`
+  over-fetches from Qdrant and keeps the best few chunks per document. Without it, one long
+  file fills all four with adjacent near-duplicate passages. Chunks also follow document
+  structure rather than a fixed 800-character width, so a chunk is a readable passage instead
+  of half a sentence.
 - **`MIN_SCORE` is a weak signal.** Relevant and irrelevant top-1 scores overlap on this
   corpus (0.59 relevant vs 0.60–0.62 irrelevant), so no threshold separates them. The
   grounding prompt inside `answer_docs` is the actual guardrail. This is why the server

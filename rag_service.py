@@ -20,7 +20,7 @@ import uuid
 from openai import OpenAI
 from qdrant_client import QdrantClient, models
 
-from corpus import TOP_K, chunk, embed, list_files, read_file
+from corpus import MAX_CHUNKS_PER_DOC, TOP_K, TOP_N, chunk, embed, list_files, read_file
 
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
@@ -187,10 +187,43 @@ def index(docs_dir=None):
 
 
 def retrieve(query, k=TOP_K):
-    """Embed the query and return the chunks that clear MIN_SCORE."""
+    """Embed the query, then spread the result slots across documents.
+
+    The dedup is the point. `k` is the number of chunks the model sees, and four slots is
+    four chances to be relevant. Querying Qdrant for exactly `k` and stopping there means a
+    single long document can fill all four with adjacent passages -- near duplicates that
+    add no evidence -- and crowd out every other candidate. So over-fetch, then keep the
+    best few per document until `k` distinct-document slots are filled.
+
+    Adjacent chunks of one document are also collapsed to their first occurrence, because
+    consecutive chunks of the same text score near-identically and would otherwise consume
+    the per-document allowance on their own.
+    """
     emb = llm.embeddings.create(model=EMBED_MODEL, input=[SEARCH_PREFIX + query])
-    points = qdrant().query_points(COLLECTION, query=emb.data[0].embedding, limit=k, with_payload=True).points
-    return [p for p in points if p.score >= MIN_SCORE]
+    # Ask for more than we need: the surplus is what makes room for other documents.
+    fetch = max(k * 4, TOP_N) if k > TOP_K else max(k, TOP_N)
+    points = qdrant().query_points(
+        COLLECTION, query=emb.data[0].embedding, limit=fetch, with_payload=True
+    ).points
+
+    kept, per_doc, last_chunk = [], {}, {}
+    for p in points:
+        if p.score < MIN_SCORE:
+            continue
+        doc_id = p.payload.get("doc_id") or p.payload.get("file") or "?"
+        idx = p.payload.get("chunk")
+        # Skip a chunk immediately following one already kept from the same document.
+        if idx is not None and last_chunk.get(doc_id) is not None and idx == last_chunk[doc_id] + 1:
+            continue
+        if per_doc.get(doc_id, 0) >= MAX_CHUNKS_PER_DOC:
+            continue
+        per_doc[doc_id] = per_doc.get(doc_id, 0) + 1
+        if idx is not None:
+            last_chunk[doc_id] = idx
+        kept.append(p)
+        if len(kept) == k:
+            break
+    return kept
 
 
 def answer(query):

@@ -131,6 +131,16 @@ BM25 (sparse) + dense + reciprocal rank fusion fixes the overlap directly, and Q
 supports sparse vectors natively, so it needs no new service. Reranking with a
 cross-encoder is the usual follow-up.
 
+This is now the main retrieval limitation. Two structural fixes have landed — chunks follow
+document structure, and `retrieve()` over-fetches then dedupes across documents so one long
+file cannot fill all four result slots — but neither addresses *scoring*, and scoring is
+where the measured failure is. `MAX_CHUNKS_PER_DOC=3` against `k=4` also still lets one
+document take three slots; raising `TOP_K` is the knob, the cap is the trade.
+
+None of it is measurable yet, because `docs/` holds one 65-byte file. `recall@4 = 0.00` on
+the holdout is a scoring artefact, not a retrieval failure. The 20–30 document sample corpus
+in section 1 is the prerequisite for measuring any of this.
+
 ## 7. Subagents and context isolation
 
 Long tasks accumulate tool output in one window. Separate context per task is how the

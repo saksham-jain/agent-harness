@@ -83,6 +83,18 @@ exception surfaces as a bare `Error executing tool X` with the traceback in the 
 - **Document identity is `doc_id`**, the path relative to the docs directory — never the
   absolute path. Absolute paths as keys are what made host and container indexing produce
   two sets of points.
+- **`docker compose build <service>` builds one image per service.** `index`, `client` and
+  `mcp-server` each get their own, and a bare `docker compose build` only rebuilds what
+  another service happens to need. A stale `index` image kept writing pre-`doc_id` payloads,
+  so host and container runs pruned each other's points on every pass — build the specific
+  service you are about to run.
+- **Chunks are structure-aware, not fixed-width.** `chunk()` splits on blank lines, keeps a
+  `# ` heading with the text beneath it, and only hard-slices a run with no boundaries.
+  Fixed-width slicing cut mid-sentence, which costs retrieval accuracy.
+- **`retrieve()` over-fetches, then dedupes.** `k` is the number of chunks the model sees,
+  so it asks Qdrant for `TOP_N` and keeps the best few per document. Four slots is four
+  chances to be relevant; without this one long document fills all four with adjacent
+  near-duplicates and every other candidate is crowded out.
 - **Indexing prunes deleted documents** and reports what it removed. One collection holds
   one corpus, so indexing a *different* directory than last time removes the previous
   directory's documents. That is intentional, not a bug.
