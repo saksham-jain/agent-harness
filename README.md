@@ -99,6 +99,8 @@ and the harness is usable by any MCP client.
 containers reach it over `host.docker.internal:11434`.
 
 Next steps, and what each one teaches: **[ENHANCEMENTS.md](ENHANCEMENTS.md)**.
+How the project got here, mistakes included: **[BUILD-JOURNEY.md](BUILD-JOURNEY.md)**.
+Rules for agents and contributors: **[AGENTS.md](AGENTS.md)**.
 
 ## Run
 
