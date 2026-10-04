@@ -1,6 +1,7 @@
 # Auth + TLS
 
-Working notes for the `feat/auth-tls` branch. Nothing here is implemented yet.
+Working notes for the `feat/auth-tls` branch. **Auth and stage-1 TLS are implemented and
+verified.** Stage 2 — a real hostname — is not, and is the only part left.
 
 ## Why this is needed
 
@@ -199,7 +200,7 @@ stop using paths as keys.
 
 Two stages, because they solve different problems and only the first is worth doing now.
 
-#### Stage 1 — encrypted localhost (do this next)
+#### Stage 1 — encrypted localhost (done)
 
 `mkcert` generates a local Certificate Authority and installs it in the macOS keychain,
 so everything on that machine trusts it automatically. Real encryption, no domain, no
@@ -209,22 +210,71 @@ DNS, no purchase.
 brew install mkcert && mkcert -install && mkcert localhost
 ```
 
-Two implementation details that matter:
+#### What the handshake actually looks like
+
+Measured against the running server with `openssl s_client -connect localhost:8443`.
+This is the real exchange, not a textbook sketch:
+
+```
+Client                                                     Server
+  │                                                            │
+  │ 1. TCP connect  ─────────────────────────────────────────►│
+  │                                                            │
+  │ 2. ClientHello                                            │  "I speak TLS 1.3, and
+  │    + SNI: localhost                                       │   here is the name I
+  │    + ALPN: h2, http/1.1                                   │   think I'm dialling"
+  │◄─────────────────────────────────────────────────────────│
+  │                                                            │
+  │                              ServerHello                   │  chosen: TLSv1.3
+  │                              Certificate  ────────────────►│  "I am localhost"
+  │                              CertificateFinished           │  "and I hold the key"
+  │◄─────────────────────────────────────────────────────────│
+  │                                                            │
+  │ 3. Validate:                                              │
+  │    · signed by a CA in my trust store?  → mkcert CA, yes  │  the keychain, from
+  │    · does it name "localhost"?          → yes             │  mkcert -install
+  │    · not expired?                       → Jan 2029        │
+  │                                                            │
+  │ 4. Derive session keys, Finished ─────────────────────────►│
+  │                                                            │
+  │ 5. Everything below is now ENCRYPTED ─────────────────────►│
+  │    HTTP request + Authorization: Bearer <token>            │
+```
+
+| | |
+| --- | --- |
+| Protocol | TLSv1.3 |
+| Certificate | `O=mkcert development certificate, OU=<you>` |
+| Issuer | `mkcert development CA` |
+| Expiry | 2029 |
+
+Two details that surprise people:
+
+- **The server sends only its own certificate, not the CA.** `openssl s_client` reports
+  `Verify return code: 21 (unable to verify the first certificate)` and that is
+  *correct* — the client already trusts the CA through the keychain, so the chain does not
+  need sending. `curl` and `httpx2` both verify, because they consult the OS store.
+- **TLS terminates inside the container.** Docker maps host `8443` to container `8000`,
+  and uvicorn does the handshake there. The bearer token in step 5 is encrypted before it
+  leaves the container — but the plain-HTTP port 8000 is a *separate* connection with no
+  TLS at all, which is why publishing that port remains the live exposure.
+
+Two implementation details that mattered:
 
 - **`MCPServer.run()` does not expose SSL options.** It builds its own
-  `uvicorn.Config` with host, port and log level only. Serving TLS from the app means
-  calling `mcp.streamable_http_app(...)` and handing the returned Starlette app to
+  `uvicorn.Config` with host, port and log level only. Serving TLS means calling
+  `mcp.streamable_http_app(...)` and handing the returned Starlette app to
   `uvicorn.run()` with `ssl_certfile` / `ssl_keyfile`. Both paths stay available: no cert
   configured means today's behaviour, unchanged.
 - **The MCP client validates through `httpx2`, which trusts the OS store via
-  `truststore`, not certifi.** So the mkcert CA should be picked up with no client
-  change. If it is not — a minimal container with no CA store is the usual cause — the
-  escape hatch is `SSL_CERT_FILE`/`SSL_CERT_DIR`, or passing `verify=` to the httpx2
-  client that `transport_for()` already builds. Worth asserting rather than assuming.
+  `truststore`, not certifi.** So the mkcert CA is picked up with no client change —
+  but only once `mkcert -install` has actually run. Verified rather than assumed: before
+  the CA was installed the default path failed with *"certificate is not trusted"*, and
+  passed an explicit `verify=` only. After installing, the default path returns 200.
 
-What this actually buys: loopback traffic is already unreachable from the network, so
-the realistic exposure is *other processes on this machine*. Useful, but it does not
-change the answer for anyone else connecting.
+What this buys: loopback traffic is already unreachable from the network, so the
+realistic exposure is *other processes on this machine*. Useful, but it does not change
+the answer for anyone else connecting.
 
 #### Stage 2 — a real hostname (only when someone else connects)
 
@@ -334,7 +384,7 @@ is `chmod 600`.
 | --- | --- | --- |
 | 1 | Static `TokenVerifier` + `AuthSettings` | **done** — 401, identity, scopes all verified |
 | 2 | Host allowlist wiring | **done** — rejects `evil.example.com`; off unless hosts named |
-| 3 | Encrypted localhost via `mkcert` | next, see design section 4 |
+| 3 | Encrypted localhost via `mkcert` | **done** — TLS served by uvicorn from the ASGI app |
 | 4 | Unpublish port 8000, or bind to `127.0.0.1` | **live exposure**, do this regardless of TLS |
 | 5 | A hostname + real certificate | blocks anyone else connecting |
 | 6 | `get_access_token()` → tenant resolution | blocks multi-user |
