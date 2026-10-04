@@ -153,11 +153,8 @@ Serving it needed bypassing `run()` entirely, since it exposes no SSL options.
 
 **Learned:** prove the trust assumption before building on it. And `Authorization` is an
 HTTP header, so stdio and the in-process `Client(mcp)` never see auth — a test using
-`Client(mcp)` proves nothing about authentication.
-
-> Auth and TLS detail lives in `AUTH-TLS.md`, which lands with `feat/auth-tls`. This
-> document sits on `docs/build-journey`, branched from `main`, so that file is not present
-> here yet.
+`Client(mcp)` proves nothing about authentication. Full design and the measured handshake:
+[AUTH-TLS.md](AUTH-TLS.md).
 
 ## Mistakes worth listing
 

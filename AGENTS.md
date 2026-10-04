@@ -3,10 +3,6 @@
 Guidance for agents and contributors working in this repository. Repo-wide rules only —
 put anything area-specific in a nested `AGENTS.md` next to the code it covers.
 
-> Written on `docs/build-journey`, branched from `main`. It describes `main` **plus** the
-> auth/TLS work on `feat/auth-tls`. `auth.py` and `AUTH-TLS.md` are referenced below but
-> live on that branch, so they are absent until it merges.
-
 ## Layout
 
 Layers, each depending only on the one below:
@@ -33,7 +29,7 @@ markdown **in the same commit**. Nothing ships with docs describing the previous
 | --- | --- |
 | any behaviour, architecture, or status change | `README.md` |
 | new idea worth doing later | `ENHANCEMENTS.md` |
-| anything auth or TLS | `AUTH-TLS.md` (currently on `feat/auth-tls`) |
+| anything auth or TLS | `AUTH-TLS.md` |
 | a mistake worth recording | `BUILD-JOURNEY.md` |
 
 **Do not describe something as working unless it was verified in this session.** Mark

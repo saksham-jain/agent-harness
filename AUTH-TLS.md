@@ -1,7 +1,7 @@
 # Auth + TLS
 
-Working notes for the `feat/auth-tls` branch. **Auth and stage-1 TLS are implemented and
-verified.** Stage 2 — a real hostname — is not, and is the only part left.
+Design and working notes. **Auth and stage-1 TLS are implemented and verified.** Stage 2 —
+a real hostname — is not, and is the only part left.
 
 ## Why this is needed
 
