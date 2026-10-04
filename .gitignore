@@ -10,3 +10,8 @@ tokens.json
 
 # Local overrides. Holds MCP_AUTH, and in production would hold secrets.
 .env
+
+# TLS material. Contains a private key — never commit.
+.certs/
+*.pem
+*.key
