@@ -130,6 +130,11 @@ exception surfaces as a bare `Error executing tool X` with the traceback in the 
 - **`web/` must be in the Dockerfile `COPY` list**, not just mounted. A volume mount alone
   leaves the file missing inside the image, and `_web_routes()` then returns `[]` — a clean
   `404`, not an error.
+- **`allowed_hosts` is not `allowed_origins`.** `TransportSecuritySettings` validates the
+  two independently, and a non-browser client sends **no `Origin` header**, so it passes with
+  hosts alone. A browser always sends one and gets `403 Forbidden` — logged as
+  `Invalid Origin header: https://…`, which never mentions the token. Derive
+  `allowed_origins` from `MCP_RESOURCE_URL` so the two cannot drift apart.
 - **A browser cannot speak MCP.** The page has to do the `initialize` handshake itself and
   echo `mcp-session-id` on every later request, or the server answers `400 Missing session
   ID`. Replies arrive as SSE (`data: {...}` lines), so take the last complete frame.

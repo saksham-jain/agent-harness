@@ -37,6 +37,25 @@ SERVER_NAME = "agent-harness-docs"
 # Empty list means disabled, so local development is unaffected.
 ALLOWED_HOSTS = [h for h in os.getenv("MCP_ALLOWED_HOSTS", "").split(",") if h]
 
+# `TransportSecuritySettings` validates Origin separately from Host, and the two lists are
+# independent — allowlisting the Host is not enough. A non-browser client sends no Origin
+# at all and passes either way, which is why this stayed hidden until the browser client
+# existed: a real browser always sends Origin, and the request is refused with 403 before
+# authentication is even considered.
+#
+# Derived from MCP_RESOURCE_URL so it cannot drift out of sync with what clients dial, which
+# is the same string that must already be correct for tokens to verify. Set
+# MCP_ALLOWED_ORIGINS to override.
+_default_origin = ""
+if os.getenv("MCP_RESOURCE_URL", "").startswith(("http://", "https://")):
+    from urllib.parse import urlsplit
+
+    _p = urlsplit(os.environ["MCP_RESOURCE_URL"])
+    _default_origin = f"{_p.scheme}://{_p.netloc}"
+ALLOWED_ORIGINS = [
+    o for o in os.getenv("MCP_ALLOWED_ORIGINS", _default_origin).split(",") if o
+]
+
 # TLS. Both must be set to serve https; unset means plain http, which is the status quo
 # and still the right thing on a loopback-only setup. Generate with `mkcert localhost`.
 TLS_CERT = os.getenv("MCP_TLS_CERT", "")
@@ -257,6 +276,7 @@ if __name__ == "__main__":
         # including local ones. Only turn it on with hosts named.
         enable_dns_rebinding_protection=bool(ALLOWED_HOSTS),
         allowed_hosts=ALLOWED_HOSTS,
+        allowed_origins=ALLOWED_ORIGINS,
     )
 
     if TLS_CERT and TLS_KEY or WEB_ENABLED:
