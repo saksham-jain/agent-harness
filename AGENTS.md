@@ -72,6 +72,13 @@ exception surfaces as a bare `Error executing tool X` with the traceback in the 
 - **Rebuild after changing the Dockerfile.** Compose keeps a *separate image per service*,
   so a stale one can carry an old `ENTRYPOINT` that silently swallows a `command:`
   override. This caused a service to run with the wrong argv.
+- **Qdrant has no authentication here.** It is bound to `127.0.0.1` so only this machine can
+  reach it, and the services reach it over the compose network by service name (`qdrant:6333`),
+  so that binding costs them nothing. Before it was `0.0.0.0:6333`, where `DELETE
+  /collections/<name>` returns `200` from anything on the LAN — that is a read *and* a wipe,
+  and it is the first thing anyone running this would find. Setting `QDRANT__SERVICE__API_KEY`
+  is the remaining half; it needs `rag_service` to send the header, so it is a code change, not
+  just config.
 - **A token table entry must be a dict.** `tokens.example.json` ships a `_comment` list for
   humans, so a fresh clone's table contains a non-dict value; verifying against it raised
   `AttributeError` inside `verify_token` — an unhandled exception on the request path instead

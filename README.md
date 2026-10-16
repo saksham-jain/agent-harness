@@ -14,6 +14,10 @@ mkdir -p docs && cp docs.sample/test.md docs/   # 2. somewhere to keep documents
 docker compose --profile index run --rm index    # 3. embed them
 ```
 
+Everything binds to `127.0.0.1` — the MCP server, and Qdrant, which has no authentication and
+so must not be reachable from the network. Its dashboard is still at
+<http://localhost:6333/dashboard>.
+
 Then either the terminal agent or the browser client:
 
 ```bash
