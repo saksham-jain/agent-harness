@@ -122,7 +122,32 @@ def index(docs_dir=None):
     docs_dir = docs_dir or DOCS_DIR
     files = list_files(docs_dir, absolute=True)
     if not files:
-        return f"No supported files found in {docs_dir!r}"
+        # An empty directory and a missing one used to return the same message and the same
+        # nothing, which hid a real defect: deleting the last file left it searchable
+        # forever, because this returned before _prune() ran. "No supported files found"
+        # read like a harmless no-op while the whole previous corpus stayed live.
+        #
+        # The two cases must be separated, because they mean opposite things:
+        #
+        #   - the directory exists and holds nothing indexable -> the corpus is genuinely
+        #     gone, so the index should follow it down
+        #   - the directory is missing -> most likely a typo or an unmounted volume, and
+        #     pruning here would empty a healthy corpus on a mistyped path
+        #
+        # So: an existing directory prunes, a missing one refuses and says so.
+        if not os.path.isdir(docs_dir):
+            return (
+                f"Refusing to index: {docs_dir!r} does not exist. Not pruning anything, "
+                "because a wrong path here would delete a healthy corpus. Mount the "
+                "directory, or check DOCS_DIR."
+            )
+        pruned = _prune(set()) if qdrant().collection_exists(COLLECTION) else []
+        if pruned:
+            return (
+                f"No supported files in {docs_dir!r}. Pruned {len(pruned)} document(s) "
+                f"that were no longer on disk: {', '.join(pruned)}."
+            )
+        return f"No supported files in {docs_dir!r}. Nothing indexed, nothing pruned."
 
     new = updated = skipped = 0
     seen = set()
