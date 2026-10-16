@@ -163,6 +163,15 @@ exception surfaces as a bare `Error executing tool X` with the traceback in the 
 - **`index_file()` refuses a path outside `docs_dir`** with `ValueError`. `doc_id` is relative
   to that directory, so an escaping path has no valid identity and would create a second,
   unreferenced copy of the corpus.
+- **A fence the text cannot produce is the only structural defence.** `_fence()` strips every
+  delimiter this module uses, including the numbered passage markers by pattern. The first
+  version stripped one marker while delimiting with another, so a document could close its
+  own block — caught by counting occurrences, not by reading it. Strip markers *and* the
+  delimiters you actually emit.
+- **Prompt-level injection defence is not sufficient at 7B.** Fenced passages plus a system
+  prompt that names the attack: `qwen2.5:7b` still complies when a document contains nothing
+  but an injection, and a hardened system prompt does not help. Do not treat upload as safe
+  because the prompt is careful — review the document before indexing it.
 - **Indexing prunes deleted documents** and reports what it removed. One collection holds
   one corpus, so indexing a *different* directory than last time removes the previous
   directory's documents. That is intentional, not a bug.
