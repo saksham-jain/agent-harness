@@ -1,8 +1,11 @@
 # Auth + TLS
 
-Design and working notes. **Auth, the hostname, and the LAN exposure fix are implemented
-and verified.** What remains is the auth *model*, not the transport: a static token table
-with no expiry, and no per-tool scopes.
+Design and working notes. **Auth, the hostname, the LAN exposure fix, and per-tool scopes are
+implemented and verified.** What remains is the auth *model*: a static token table with no
+expiry, so possession is still identity.
+
+New here and easy to nod along to without understanding: **§1a explains read vs write scopes
+in plain language**, before the technical version.
 
 The current shape:
 
@@ -12,7 +15,8 @@ The current shape:
 | Certificate | Let's Encrypt, auto-renewed, 90 days |
 | Transport | Tailscale Funnel; TLS terminates at the edge |
 | Origin | plain HTTP on `127.0.0.1:8000`, no LAN route |
-| Auth | static bearer tokens, `docs:read` |
+| Auth | static bearer tokens, no expiry |
+| Scopes | `docs:read` for search and listing; `docs:write` for `refresh_index`, checked per tool |
 
 ## Why this was needed
 
@@ -185,6 +189,48 @@ Why a table first:
 
 Swap later for JWT verification, or introspection against a real authorization server
 (`IntrospectionTokenVerifier` in the SDK's `examples/servers/simple-auth/`).
+
+### 1a. Read and write are different keys — in plain terms
+
+The technical description is below; this is the same thing without jargon, because
+"scopes" is easy to nod along to and hard to picture.
+
+**Before.** Every key that opened the door could do everything, including throwing the
+library away and rebuilding it. If you ever handed a key to a friend, or a phone went
+missing, that key could rebuild your whole index. All-or-nothing.
+
+**After.** Permissions are written on the key:
+
+```
+your key      [read, write]   look, and rebuild
+friend's key  [read]          look only
+```
+
+A friend who can look things up **cannot** rebuild your library.
+
+A refusal says why:
+
+```
+This tool needs docs:write, which this token does not have. Held: docs:read.
+```
+
+That wording is the point. A bare "Error" leaves the model with nothing to act on; naming
+the missing permission lets it say *"I need a write key for that"*, which is retryable
+rather than a dead end.
+
+**Why the obvious approach fails.** There is already a setting, `MCP_REQUIRED_SCOPES`,
+meaning "every key must have at least this". Adding `docs:write` there would force it on
+**every key**, because the SDK checks that list on every single request — so the read-only
+key would need write access too. Everyone would need everything, which is backwards. Hence
+the second, separate check: each tool states what it needs, and the key is compared to that.
+
+**Why it was done before upload.** The gap already existed on its own — a read-only token
+could rebuild the index today. Fixing it first means that when uploads arrive, "can write to
+your filesystem" is a separate key rather than a side effect of "can search your documents".
+
+**What it does not fix.** Keys never expire. A key can be correctly limited and still be
+permanent: if one leaks, it is yours until you edit the table and restart. That is a
+separate problem from permissions.
 
 ### 2. Per-tenant collection
 
@@ -498,7 +544,7 @@ What would actually close this, in order of effort:
 
 | Step | Cost | Effect |
 | --- | --- | --- |
-| Per-tool scopes — read vs index | small | a leaked token cannot rewrite the index |
+| ~~Per-tool scopes — read vs index~~ | **done** | a leaked read token cannot rewrite the index |
 | Token expiry | small | a stolen token stops working on its own |
 | A real hostname on a Cloudflare zone + Access | ~$10/yr + config | OAuth in front; **no token in the browser at all** |
 
@@ -539,7 +585,7 @@ That makes `.gitignore` load-bearing rather than tidy. A lease or a passport sca
 | 5 | A hostname + real certificate | **done** — Tailscale Funnel, Let's Encrypt cert |
 | 6 | `get_access_token()` → tenant resolution | blocks multi-user |
 | 7 | `doc_id` replacing path keys | **done** — relative to the docs directory |
-| 8 | Scope checks per tool — split read from write | no |
+| 8 | Scope checks per tool — split read from write | **done** — `docs:write` gates `refresh_index` |
 
 Steps 1–5 leave the server safe on one machine and reachable by name. Steps 6 and 8 are
 what make it safe for many users. Two of the four original problems were only ever

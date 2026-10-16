@@ -191,6 +191,33 @@ Enable auth with `MCP_AUTH=1` in `.env`. It is currently a **static token table*
 possession is identity, no expiry, and revocation means editing the file and restarting.
 Fine for a pilot with trusted users, not production auth.
 
+### Read and write are different scopes
+
+| Scope | Grants |
+|---|---|
+| `docs:read` | `answer_docs`, `list_docs`, `index_status`, `whoami` |
+| `docs:write` | `refresh_index` — it rewrites the index |
+
+These are enforced differently, and that difference is the whole design. `docs:read` is
+`MCP_REQUIRED_SCOPES`, a **floor** the SDK applies to every request with AND semantics.
+Per-tool scopes are declared with `@needs_scope()` and checked against the token's own
+scopes. Putting `docs:write` in the required list would force it on read-only tokens — the
+opposite of the intent.
+
+Verified with two real tokens over HTTPS:
+
+```
+answer_docs    saksham (read+write) -> cited answer
+answer_docs    bob     (read only)   -> cited answer
+refresh_index  saksham              -> Index ready: 0 new, 0 updated, 1 unchanged
+refresh_index  bob                  -> This tool needs docs:write, which this token does not have.
+```
+
+The refusal is a `ToolError`, so the model reads the reason and can ask for the right token
+— which a bare "Error executing tool" would not allow. A token with no `scopes` field falls
+back to the required list, so an entry predating this is read-only rather than accidentally
+privileged.
+
 ### Why a tunnel rather than a certificate in the container
 
 A `mkcert` certificate exists only where its CA is installed, so it could never let

@@ -32,6 +32,11 @@ ISSUER_URL = os.getenv("MCP_ISSUER_URL", "https://auth.example.com/")
 REQUIRED_SCOPES = [s for s in os.getenv("MCP_REQUIRED_SCOPES", "docs:read").split(",") if s]
 TOKENS_FILE = os.getenv("MCP_TOKENS_FILE", "tokens.json")
 
+# Scopes that grant mutation. Kept apart from REQUIRED_SCOPES on purpose: that list is the
+# floor every request must clear, and mixing a write scope into it would force every
+# read-only token to carry write access.
+WRITE_SCOPE = os.getenv("MCP_WRITE_SCOPE", "docs:write")
+
 
 class StaticTokenVerifier(TokenVerifier):
     """Looks a token up in a table. Each entry says who it belongs to and what scopes
@@ -108,3 +113,33 @@ def whoami():
     from mcp.server.auth.middleware.auth_context import get_access_token
 
     return get_access_token()
+
+
+def missing_scopes(required):
+    """Scopes the current caller lacks, given the scopes they hold.
+
+    This is the per-tool check, and it exists because `AuthSettings.required_scopes` cannot
+    do the job: the SDK applies that list to *every* request with AND semantics, so adding
+    a write scope there would demand it of read-only tokens too. Per-tool means comparing
+    one tool's requirement against the token's own scopes, which is all this does.
+
+    Returns an empty list when there is no token on the request — auth is off, or the call
+    did not come over HTTP. That matches the rest of the module: with `MCP_AUTH=0` the
+    server is open by design and scope checks would be theatre.
+
+    A token's scopes default to `REQUIRED_SCOPES` when the table omits them, so an entry
+    written before per-tool scopes existed is read-only rather than accidentally
+    privileged.
+    """
+    if not isinstance(required, (list, tuple, set)):
+        required = [required]
+    token = whoami()
+    if token is None:
+        return []
+    held = set(token.scopes or ())
+    return [s for s in required if s not in held]
+
+
+def has_scope(*required) -> bool:
+    """True when the current caller holds every named scope, or when auth is off."""
+    return not missing_scopes(required)

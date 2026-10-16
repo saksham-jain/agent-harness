@@ -77,6 +77,10 @@ exception surfaces as a bare `Error executing tool X` with the traceback in the 
   as the source of truth, so those files are the only copy — and once something is in git
   history, removing it does not remove it. `docs.sample/` is the committed corpus the evals
   use; `DOCS_DIR` picks which.
+- **`MCP_REQUIRED_SCOPES` is a floor, not a place for write scopes.** The SDK applies it to
+  every request with AND semantics, so adding `docs:write` there would force it on read-only
+  tokens. Per-tool scopes go through `@needs_scope()` and are checked against the token's own
+  scopes. Raise `ToolError` there, not a bare exception, so the reason reaches the model.
 - **`MCP_RESOURCE_URL` must equal the URL clients dial**, exactly. It names the resource a
   token is issued for; a mismatch verifies locally and is rejected remotely.
 - **`MCP_ALLOWED_HOSTS` must include the port clients use**, or DNS-rebinding protection

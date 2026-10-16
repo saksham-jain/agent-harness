@@ -210,11 +210,18 @@ Two operational notes, both learned the hard way:
 Remaining on the auth side, and these are the real limits:
 
 - **The token table has no expiry and no revocation** short of editing the file and
-  restarting. Possession is identity.
-- **`refresh_index` is a mutation** and every token currently holds `docs:read`, which is
-  all it checks. One token leaked is one leaked corpus *and* one writable index.
-- **Per-tool scopes** are still on the roadmap: split read from write so `refresh_index`
-  needs something a read-only client would not hold.
+  restarting. Possession is identity — and a key can be correctly limited and still be
+  permanent.
+- **~~Per-tool scopes~~ — done.** `docs:write` gates `refresh_index`, checked per tool
+  against the token's own scopes rather than through `MCP_REQUIRED_SCOPES`, which the SDK
+  applies to every request with AND semantics and would therefore force write access on
+  every token. Verified with two tokens: `bob` reads the corpus and is refused the mutation
+  with a message naming what is missing. Plain-language version in `AUTH-TLS.md` §1a.
+
+Two things the scope split does *not* cover, and they are the reason to do it rather than
+stop there: there is still no expiry, and document uploads will need the same treatment —
+an uploaded file is untrusted text that reaches a model's context, which is a different
+problem from being able to re-index.
 
 Whichever route is ever used, `MCP_RESOURCE_URL` must be the exact https URL clients connect to — it
 names which resource a token is issued for, and where discovery lives. Getting it wrong
