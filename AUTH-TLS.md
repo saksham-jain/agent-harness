@@ -580,18 +580,19 @@ That makes `.gitignore` load-bearing rather than tidy. A lease or a passport sca
 | --- | --- | --- |
 | 1 | Static `TokenVerifier` + `AuthSettings` | **done** — 401, identity, scopes all verified |
 | 2 | Host allowlist wiring | **done** — rejects `evil.example.com`; off unless hosts named |
-| 3 | Encrypted localhost via `mkcert` | **done** — TLS served by uvicorn from the ASGI app |
+| 3 | Encrypted localhost via `mkcert` | **done** — later superseded by the tunnel |
 | 4 | Unpublish port 8000, or bind to `127.0.0.1` | **done** — `127.0.0.1:8000:8000`; `192.168.1.3:8000` refuses |
 | 5 | A hostname + real certificate | **done** — Tailscale Funnel, Let's Encrypt cert |
 | 6 | `get_access_token()` → tenant resolution | blocks multi-user |
 | 7 | `doc_id` replacing path keys | **done** — relative to the docs directory |
 | 8 | Scope checks per tool — split read from write | **done** — `docs:write` gates `refresh_index` |
+| 9 | Token expiry | **not started** — possession is still identity |
+| 10 | `index_file()` + `remove_document()` | **done** — one document at a time, never prunes |
 
-Steps 1–5 leave the server safe on one machine and reachable by name. Steps 6 and 8 are
-what make it safe for many users. Two of the four original problems were only ever
-*partly* fixed and should not be read as closed: `refresh_index` is still a mutation
-guarded only by a scope that every current token holds, and the token table still has no
-expiry.
+Steps 1–5 leave the server safe on one machine and reachable by name. Steps 6 and 9 are
+what make it safe for many users. Step 8 is done but only splits the existing tools: an
+upload endpoint will need the same gate, and the token table still has no expiry, so
+permission and lifetime remain separate problems.
 
 ## What is deliberately not planned
 
