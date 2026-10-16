@@ -71,16 +71,26 @@ services:
     environment:
       - LLM_BASE_URL=http://host.docker.internal:11434/v1   # native Ollama on your Mac
       - LLM_MODEL=qwen2.5:7b
-      - MCP_SERVER_URL=http://mcp-server:8000/mcp
-      # Sent as `Authorization: Bearer`. Empty means no header, which fails against an
-      # auth-enabled server -- that is the intended behaviour, not a bug.
+      # Defaults to the in-network address, which is only correct when the origin serves
+      # plain HTTP. With the Tailscale Funnel the origin is HTTP bound to 127.0.0.1 and the
+      # host allowlist names only the public hostname, so the internal address answers 421.
+      # Set MCP_SERVER_URL in .env to the https URL in that case.
+      - MCP_SERVER_URL=${MCP_SERVER_URL:-http://mcp-server:8000/mcp}
+      # Token used by mcp-client. Optional: with no token set, mcp_client reads the first
+      # entry from tokens.json (mounted read-only below). Set it only to override which
+      # token is used. Note compose does NOT run shell substitution in .env, so a $(...)
+      # here would arrive as that literal string.
       - MCP_BEARER_TOKEN=${MCP_BEARER_TOKEN:-}
+      - MCP_TOKENS_FILE=/run/tokens.json
       - SKILLS_DIR=/work/skills
       - ROUTER_MODEL=qwen2.5:1.5b   # small model gating answer_docs; "" disables
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ${WORKDIR:-.:/work}       # the agent's working dir, including skills/
+      # Read-only, so mcp_client can read a token directly and no secret has to be pasted
+      # into .env before every run.
+      - ./tokens.json:/run/tokens.json:ro
 
   index:
     build: .

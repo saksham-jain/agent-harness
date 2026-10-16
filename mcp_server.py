@@ -10,13 +10,16 @@ Serves: http://<MCP_HOST>:<MCP_PORT><MCP_PATH>   (0.0.0.0:8000/mcp in Docker)
 
 Clients connect with a plain URL:  Client("http://localhost:8000/mcp")
 """
+import asyncio
 import functools
+import inspect
 import logging
 import os
 import time
 from datetime import datetime, timezone
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel
@@ -52,7 +55,32 @@ def logged(fn):
 
     Applied under @mcp.tool() so functools.wraps keeps the type hints that the
     server turns into the input schema.
+
+    Async tools need an async wrapper. A sync one returns the coroutine object instead of
+    awaiting it, and the schema then describes the tool as returning a string while the
+    body actually hands back a coroutine — which fails at the first string operation, far
+    from the cause.
     """
+
+    if inspect.iscoroutinefunction(fn):
+
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            args_text = ", ".join(
+                [repr(a)[:80] for a in args] + [f"{k}={v!r}"[:80] for k, v in kwargs.items()]
+            )
+            started = time.perf_counter()
+            try:
+                result = await fn(*args, **kwargs)
+            except Exception as e:
+                log.warning("%s(%s) failed after %.0fms: %s", fn.__name__, args_text,
+                            (time.perf_counter() - started) * 1000, e)
+                raise
+            log.info("%s(%s) -> %s in %.0fms", fn.__name__, args_text,
+                     repr(result)[:120], (time.perf_counter() - started) * 1000)
+            return result
+
+        return wrapper
 
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
@@ -96,11 +124,41 @@ class DocInfo(BaseModel):
 
 @mcp.tool(title="Answer from the documents")
 @logged
-def answer_docs(query: str) -> str:
+async def answer_docs(query: str, ctx: Context) -> str:
     """Answer a question using the indexed documents. Returns a cited answer, or says
     plainly that the documents do not cover it. Use this for anything about the user's
-    own files rather than guessing."""
-    return rag_service.answer(query)
+    own files rather than guessing.
+
+    Takes a while on first use: generation is a local model. If your client shows
+    progress, tokens arrive as they are produced."""
+    # Retrieval is quick and generation is not, so the two phases report separately. A
+    # client that asked for progress gets a moving indicator instead of a frozen call.
+    def on_token(piece):
+        nonlocal emitted
+        emitted += 1
+        # Progress rather than the text itself: the final result already carries the whole
+        # answer, and shipping every fragment twice would double the payload for no gain.
+        return ctx.report_progress(float(emitted), None, piece.strip()[:60] or None)
+
+    emitted = 0
+    loop = asyncio.get_running_loop()
+    try:
+        await ctx.report_progress(0.0, None, "searching the corpus")
+        hits = await loop.run_in_executor(None, rag_service.retrieve, query)
+        if not hits:
+            return rag_service.abstention(query)
+        await ctx.report_progress(0.0, None, f"reading {len(hits)} passages, generating")
+
+        def sync_on_token(piece):
+            # report_progress is async; the generator runs in a worker thread.
+            asyncio.run_coroutine_threadsafe(on_token(piece), loop).result()
+
+        text = await loop.run_in_executor(None, lambda: rag_service.answer_from(query, hits, sync_on_token))
+    except Exception as e:
+        if isinstance(e, ToolError):
+            raise
+        return rag_service.answer_error(query, e)
+    return text
 
 
 @mcp.tool(title="List indexed documents")

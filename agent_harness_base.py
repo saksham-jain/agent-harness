@@ -253,22 +253,59 @@ def select_tools(tools, wants_docs):
     return local + docs if wants_docs else local
 
 
-def run_turn(messages, tools, bridge, prompt):
+def force_answer_docs(bridge, query):
+    """Call answer_docs because the router said to and the model did not. Returns the text.
+
+    Returns None when the call fails, so the caller can fall back to whatever the model
+    said. That fallback matters: this path exists to catch a model that declined, and it
+    must not replace a usable answer with an error.
+    """
+    print(f"\n[tool:mcp] answer_docs({{'query': {query!r}}}) (forced: router said documents)")
+    try:
+        return result_to_text(bridge.call(DOCS_TOOL_NAME, {"query": query}))
+    except Exception as e:
+        print(f"  forced answer_docs failed: {e}")
+        return None
+
+
+def run_turn(messages, tools, bridge, prompt, wants_docs=None):
     messages.append({"role": "user", "content": prompt})
     for _ in range(MAX_STEPS):
         resp = client.chat.completions.create(model=MODEL, messages=messages, tools=tools)
         msg = resp.choices[0].message
         messages.append(msg.model_dump(exclude_none=True))
 
+        if not msg.tool_calls:
+            # The router said this question needs the corpus, and the main model declined to
+            # call the tool anyway. Measured, not assumed: qwen2.5:7b called answer_docs for
+            # 0 of 3 document questions when the system prompt described *which tool to
+            # prefer* without saying the documents existed. It answered from memory instead,
+            # which for a personal corpus means confidently wrong -- it said it had no
+            # November trip while test.md contained exactly that.
+            #
+            # So the router's decision is enforced here rather than left as a suggestion.
+            # This is the one place the model does not get a veto, and deliberately: the
+            # router is a 1.5B making a binary call, and the 7B has already demonstrated it
+            # will not act on the same signal.
+            if wants_docs and bridge is not None:
+                forced = force_answer_docs(bridge, prompt)
+                if forced:
+                    # Print it. This is the answer the user asked for, and answer_docs
+                    # already returns a finished, cited response rather than raw chunks, so
+                    # there is nothing further to synthesise.
+                    print(f"\n{forced}")
+                    messages.append({"role": "assistant", "content": forced})
+                    return
+            if msg.content:
+                print(f"\n{msg.content}")
+            else:
+                # A small model sometimes stops without saying anything at all. Say so
+                # rather than leaving the user staring at an apparently dead agent.
+                print("\n[model returned nothing - try rephrasing, or call a tool with /call]")
+            return
+
         if msg.content:
             print(f"\n{msg.content}")
-        elif not msg.tool_calls:
-            # A small model sometimes stops without saying anything at all. Say so
-            # rather than leaving the user staring at an apparently dead agent.
-            print("\n[model returned nothing - try rephrasing, or call a tool with /call]")
-            return
-        if not msg.tool_calls:
-            return
 
         for tc in msg.tool_calls:
             try:
@@ -338,7 +375,7 @@ def main():
             wants_docs = needs_documents(prompt)
             if wants_docs is not None:
                 print(f"[route] {'documents' if wants_docs else 'no documents'}")
-            run_turn(messages, select_tools(tools, wants_docs), bridge, prompt)
+            run_turn(messages, select_tools(tools, wants_docs), bridge, prompt, wants_docs)
 
         messages[:] = trim_history(messages)  # bound context growth across turns
 
