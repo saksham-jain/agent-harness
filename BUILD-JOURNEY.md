@@ -95,7 +95,16 @@ binary call per message, then filtering the tool list on the answer.
 
 The error directions are deliberately asymmetric: a false **negative** hides
 `answer_docs` so the model cannot search (damaging), while a false **positive** only
-adds a tool back (harmless). So it is permissive and never forces a call.
+adds a tool back (cheap). So the router is permissive.
+
+This reasoning was correct and still incomplete. Permissive was meant to mean "harmless",
+and for a while it was — but the 7B was offered `answer_docs` and declined, answering from
+memory instead: **0 of 3** document questions, with the router right every time. The cost
+of a false positive stopped being harmless the moment the model ignored the decision anyway.
+`run_turn` now makes the router's call binding when the model returns no tool call, which is
+the one place the model has no veto. `README.md` has the measurements, and the eval scores
+`model would call` separately from `routing accuracy` because routing accuracy alone reads
+`1.00` on a completely broken path.
 
 Tried `qwen2.5:0.5b` first: **4/8, coin-flip, and it routed arithmetic to the corpus.**
 1.5b scored 6/8. Measured, not assumed.
@@ -183,6 +192,8 @@ HTTP header, so stdio and the in-process `Client(mcp)` never see auth — a test
 | Put `MCP_SERVER_URL` as a literal in `docker-compose.yml` | `.env` cannot override a hardcoded value, so the client kept dialling an internal address that now answers `421` |
 | Verified the web client with a Python client, then reported it working | The browser sends an `Origin` header and Python does not, so the test could not reproduce the failure. It shipped a `403` that named the hostname while the page blamed the token, and sent both of us after the wrong thing |
 | Allowlisted `allowed_hosts` and assumed that covered browsers | It does not. The SDK validates `Origin` separately, and only a browser ever sends one — so the check was untested by every client used until then |
+| Called a false-positive route "harmless" and left it that way | It stopped being harmless when the 7B ignored the router anyway. The asymmetry argument was right about the router and wrong about the model |
+| Shipped a system prompt advertising a tool that did not exist | `- add : arithmetic` was in the prompt for the whole project with no `add` anywhere, so arithmetic silently fell through to retrieval. It also omitted three tools that *did* exist |
 | Diagnosed a "duplicate point" as a `_stored_hash` bug | It read `None` only because I had scrolled with `with_payload=['doc_id','source']`, so Qdrant returned nothing for `hash`. The real cause was a stale `index` image |
 | Ran `docker compose build` and assumed every service was rebuilt | Per-service images. `agent_harness-index` stayed two days old and kept writing pre-`doc_id` payloads, so host and container runs pruned each other on every pass |
 | Treated `#` headings as chunk boundaries everywhere | Produced 32 chunks of ~76 chars from a 2.4 KB file. Only `# ` is a document boundary; `##` sections pack together, since the heading text stays in the chunk |
