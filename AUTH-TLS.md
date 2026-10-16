@@ -446,6 +446,26 @@ Turn it off again with `MCP_AUTH=0` in `.env`.
 template. Tokens are stored in plaintext — it is a lookup table, not a hash — so the file
 is `chmod 600`.
 
+### Host allowlist and Origin are two different lists
+
+`TransportSecuritySettings` validates the **`Host`** header and the **`Origin`** header
+against separate allowlists. Allowlisting the host is not sufficient for a browser, and the
+failure is worth writing down because it is easy to misread:
+
+```
+WARNING mcp.server.transport_security: Invalid Origin header: https://<host>
+POST /mcp  → 403 Forbidden
+```
+
+A browser always sends `Origin`; a command-line or scripted client normally does not, which
+is why this passed every test that existed before there was a page. The `403` arrives
+**before authentication**, so a valid token looks invalid — and the log line names the
+hostname, not the credential.
+
+`allowed_origins` is therefore derived from `MCP_RESOURCE_URL` rather than configured
+separately: it is the same string that already has to be correct for tokens to verify, so
+the two cannot drift apart. Override with `MCP_ALLOWED_ORIGINS`.
+
 ## Reaching it from elsewhere
 
 Verified from outside the machine, with a hand-rolled client over the tunnel:
