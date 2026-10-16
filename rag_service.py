@@ -429,15 +429,21 @@ def safe_upload_name(name):
     return safe
 
 
-def validate_upload(name, size, docs_dir=None):
+def validate_upload(name, size=None, docs_dir=None):
     """Check a proposed upload before anything is written. Returns the safe filename.
 
-    Order matters: name first, because a bad name should be refused before its size is
-    even considered. Raises ValueError rather than returning a verdict, so a caller cannot
+    `size=None` means "not known yet" and skips the size checks, which is what a multipart
+    handler wants when it must validate the name before it has read the body. Passing `0`
+    instead does not mean the same thing: it means the file is empty, and is refused.
+
+    Order matters: name first, because a bad name should be refused before its size is even
+    considered. Raises ValueError rather than returning a verdict, so a caller cannot
     forget to check.
     """
     safe = safe_upload_name(name)
-    if size is None or size < 0:
+    if size is None:
+        return safe
+    if size < 0:
         raise ValueError(f"Cannot determine the size of {safe!r}.")
     if size == 0:
         raise ValueError(f"{safe!r} is empty.")

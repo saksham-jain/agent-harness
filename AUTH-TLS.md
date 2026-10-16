@@ -551,7 +551,40 @@ What would actually close this, in order of effort:
 The last one is the only change that removes the credential from the client, and it is the
 one that needs money — which is why the page stores a token instead.
 
-### Where documents live
+#### Staged upload
+
+An upload lands in `docs/uploads/pending/` and **stays there until a human approves it**.
+`POST /uploads/approve` is what calls `index_file()`.
+
+This is measured, not caution for its own sake — see §1a and `ENHANCEMENTS.md`. A document
+that is *only* an injection defeats `qwen2.5:7b` even with fenced passages and a system
+prompt naming the attack. Reviewing the file before it joins the corpus is the only control
+found to hold.
+
+| Route | Scope | |
+| --- | --- | --- |
+| `POST /upload` | `docs:write` | multipart, one file, into `pending/` |
+| `GET /uploads` | `docs:read` | what is waiting for review |
+| `POST /uploads/approve` | `docs:write` | move into the corpus and index that one file |
+| `POST /uploads/reject` | `docs:write` | delete it; nothing was indexed |
+| `GET /docs` | `docs:read` | everything indexed, by `doc_id` and chunk count |
+
+Not MCP, deliberately: an MCP tool call carries base64 in a JSON-RPC body and the SDK caps
+those at **4 MB**, which a PDF reaches quickly. Multipart over HTTP has no such cap, and
+`/upload` shares an origin with `/mcp` so the browser client needs no CORS handling.
+
+Two structural consequences worth knowing:
+
+- **`/docs` is mounted writable.** Uploads must live inside `DOCS_DIR`, because `index()`
+  prunes anything outside it — a separate upload directory would be deleted by the next
+  `refresh_index`. It cannot stay `:ro` with a writable `uploads/` nested under it: Docker
+  cannot create a mount point inside a read-only bind, and it fails at container *start*,
+  not at first write. The committed sample is mounted back over the top read-only instead.
+- **`GET /docs` returns `doc_id`, not `source`.** The absolute path is deliberately not
+  exposed; a search already reveals the content, and the host's directory layout is not
+  something a read token needs to disclose.
+
+## Where documents live
 
 Two directories, one committed and one not:
 

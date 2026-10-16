@@ -37,13 +37,23 @@ services:
       - MCP_TLS_CERT=${MCP_TLS_CERT:-}
       - MCP_TLS_KEY=${MCP_TLS_KEY:-}
     volumes:
-      # Defaults to the committed sample corpus so a fresh clone indexes something.
-      # Set DOCS_DIR=./docs in .env for your own documents; that directory is
-      # gitignored, and a missing one makes the indexer refuse rather than prune.
-      - ${DOCS_DIR:-./docs.sample}:/docs:ro
+      # Your documents, gitignored. This mount is WRITABLE, which is the first time this
+      # server can write to the host.
+      #
+      # Uploads must land inside DOCS_DIR in any case, because index() prunes anything
+      # outside it — a separate upload directory would be deleted by the next
+      # refresh_index. The mount cannot stay :ro with a writable uploads/ nested under it:
+      # Docker cannot create a mount point inside a read-only bind, and it fails at container
+      # start rather than at first write, which is a confusing way to learn it.
+      - ${DOCS_DIR:-./docs}:/docs
+      # The committed sample corpus, mounted back over the writable directory read-only so a
+      # fresh clone indexes something and the sample cannot be altered by the server.
+      - ./docs.sample/test.md:/docs/test.md:ro
       # The browser client at `/`. Read-only; the server only ever reads it. Baked into the
       # image too, so this mount is only needed to edit the page without a rebuild.
       - ./web:/work/web:ro
+      # upload.py serves the staged upload routes.
+      - ./upload.py:/work/upload.py:ro
       # Read-only: the server only ever reads the token table.
       - ./tokens.json:/run/tokens.json:ro
       # Read-only, and gitignored: contains a private key.

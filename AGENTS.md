@@ -172,6 +172,18 @@ exception surfaces as a bare `Error executing tool X` with the traceback in the 
   prompt that names the attack: `qwen2.5:7b` still complies when a document contains nothing
   but an injection, and a hardened system prompt does not help. Do not treat upload as safe
   because the prompt is careful — review the document before indexing it.
+- **`docker compose up -d` does not restart a container when only a bind-mounted file
+  changed.** `upload.py` is mounted, so an edit is invisible to the running process and the
+  old module keeps serving. `docker compose restart mcp-server` after touching a mounted
+  module — the symptom is 404s on routes that provably exist in the file.
+- **Starlette's `UploadFile.read()` is a coroutine**, and writing to `upload_file.file`
+  fills Starlette's spool rather than the destination — the upload reports success and the
+  file on disk is 0 bytes. Pass an open handle in.
+- **Docker cannot nest a bind mount inside a `:ro` bind.** It fails at container start with
+  `read-only file system`, not at first write.
+- **`validate_upload(name, size)` treats `0` and `None` differently.** `None` means "size not
+  known yet" and skips the size checks; `0` means the file is empty and is refused. Passing
+  `0` to validate a name before reading the body refuses every upload.
 - **Indexing prunes deleted documents** and reports what it removed. One collection holds
   one corpus, so indexing a *different* directory than last time removes the previous
   directory's documents. That is intentional, not a bug.
