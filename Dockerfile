@@ -9,6 +9,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY auth.py corpus.py mcp_client.py rag_service.py mcp_server.py agent_harness_base.py index_docs.py skills.py ./
+COPY web/ ./web/
 
 # No ENTRYPOINT on purpose: compose overrides the command per service.
 CMD ["python", "mcp_server.py"]

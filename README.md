@@ -212,6 +212,42 @@ Roadmap: **[ENHANCEMENTS.md](ENHANCEMENTS.md)**.
 How the project got here, mistakes included: **[BUILD-JOURNEY.md](BUILD-JOURNEY.md)**.
 Rules for agents and contributors: **[AGENTS.md](AGENTS.md)**.
 
+## Use it from a phone
+
+`web/index.html` is served at `/`, same origin as `/mcp`. Open the hostname in any phone
+browser, paste a bearer token once, and it works — no app, no build step, no framework.
+
+```
+https://sakshams-macbook-air.tailf61e07.ts.net/
+```
+
+The page is a real MCP client: it runs `initialize`, keeps the `mcp-session-id` it gets
+back, and sends it on every later request. Skipping that handshake gets `400 Missing session
+ID`, and replies arrive as SSE frames rather than one JSON body.
+
+Same origin is the point — no CORS preflight, and no second hostname to remember.
+
+**The token lives in `localStorage` on a public hostname.** That is the same trust boundary
+as the API itself — the Funnel hostname is reachable by anyone, and the token never expires
+— so this does not weaken anything, but it does mean a shared browser profile should not
+keep it. See [AUTH-TLS.md](AUTH-TLS.md) for what would close that.
+
+Anything else speaking MCP over HTTP works the same way:
+
+```json
+{
+  "mcpServers": {
+    "agent-harness": {
+      "type": "http",
+      "url": "https://sakshams-macbook-air.tailf61e07.ts.net/mcp",
+      "headers": { "Authorization": "Bearer tok_saksham_..." }
+    }
+  }
+}
+```
+
+Set `MCP_WEB=0` to turn the page off and keep the surface protocol-only.
+
 ## Where the GPU is used
 
 **Only on the host. The containers have no GPU and never will.**

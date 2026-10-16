@@ -38,6 +38,9 @@ services:
       - MCP_TLS_KEY=${MCP_TLS_KEY:-}
     volumes:
       - ${DOCS_DIR:-./docs}:/docs:ro
+      # The browser client at `/`. Read-only; the server only ever reads it. Baked into the
+      # image too, so this mount is only needed to edit the page without a rebuild.
+      - ./web:/work/web:ro
       # Read-only: the server only ever reads the token table.
       - ./tokens.json:/run/tokens.json:ro
       # Read-only, and gitignored: contains a private key.

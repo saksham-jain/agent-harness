@@ -41,6 +41,10 @@ ALLOWED_HOSTS = [h for h in os.getenv("MCP_ALLOWED_HOSTS", "").split(",") if h]
 # and still the right thing on a loopback-only setup. Generate with `mkcert localhost`.
 TLS_CERT = os.getenv("MCP_TLS_CERT", "")
 TLS_KEY = os.getenv("MCP_TLS_KEY", "")
+
+# Serve web/index.html at `/`, so a phone browser can talk to this over the Funnel.
+# Off by default: it is a convenience, not part of the protocol surface.
+WEB_ENABLED = os.getenv("MCP_WEB", "1") not in ("0", "false", "")
 LOG_LEVEL = os.getenv("MCP_LOG_LEVEL", "INFO")
 
 logging.basicConfig(
@@ -211,7 +215,43 @@ def status() -> str:
     return f"{SERVER_NAME} {state} at {datetime.now(timezone.utc).isoformat(timespec='seconds')}"
 
 
+def _web_routes():
+    """A Starlette route serving the browser client at `/`, or [] if it is unavailable.
+
+    Same origin on purpose: the page calls `/mcp` on its own host, so there is no CORS
+    preflight and no second Funnel hostname to keep in step.
+
+    These go into the MCP app's own route list rather than being mounted in front of it.
+    Wrapping was tried first and does not work: mounting a sub-app does not run its
+    lifespan, so the MCP session manager never starts and every request fails with
+    "Task group is not initialized. Make sure to use run()". That only surfaces on
+    `initialize`, because a request rejected for auth never reaches the code that needs
+    the task group - so a broken mount looks like a healthy server.
+
+    `_custom_starlette_routes` is private to the SDK, so this degrades to "no web page"
+    rather than raising if a future version drops it. Checked rather than assumed.
+    """
+    import os
+
+    if not WEB_ENABLED:
+        return []
+    page = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "index.html")
+    if not os.path.exists(page) or not hasattr(mcp, "_custom_starlette_routes"):
+        return []
+
+    from starlette.responses import FileResponse
+    from starlette.routing import Route
+
+    async def index(_request):
+        return FileResponse(page, media_type="text/html")
+
+    return [Route("/", endpoint=index)]
+
+
 if __name__ == "__main__":
+    # Registered before the app is built; the SDK forwards this list into the app's routes.
+    mcp._custom_starlette_routes = _web_routes()
+
     transport_security = TransportSecuritySettings(
         # Enabling the check with an empty allow list would lock out every request,
         # including local ones. Only turn it on with hosts named.
@@ -219,7 +259,7 @@ if __name__ == "__main__":
         allowed_hosts=ALLOWED_HOSTS,
     )
 
-    if TLS_CERT and TLS_KEY:
+    if TLS_CERT and TLS_KEY or WEB_ENABLED:
         # mcp.run() builds its own uvicorn.Config with host, port and log level only,
         # so it cannot serve TLS. Take the ASGI app it would have served and hand it
         # to uvicorn directly. Both paths stay available: with no cert configured this
@@ -234,8 +274,8 @@ if __name__ == "__main__":
             host=HOST,
             port=PORT,
             log_level=LOG_LEVEL.lower(),
-            ssl_certfile=TLS_CERT,
-            ssl_keyfile=TLS_KEY,
+            ssl_certfile=TLS_CERT or None,
+            ssl_keyfile=TLS_KEY or None,
         )
     else:
         # transport_security is a run() argument, not a constructor argument.
@@ -245,4 +285,5 @@ if __name__ == "__main__":
             port=PORT,
             streamable_http_path=PATH,
             transport_security=transport_security,
+            custom_starlette_routes=mcp._custom_starlette_routes,
         )

@@ -120,6 +120,19 @@ exception surfaces as a bare `Error executing tool X` with the traceback in the 
 - **`connect()` treats a 401 as unreachable.** A missing or truncated token produces
   `MCP unavailable (...)` and the agent starts with no document tools, which reads exactly
   like a retrieval failure and is not one.
+- **Do not mount the MCP app inside another Starlette app.** Mounting a sub-app does not run
+  its lifespan, so the MCP session manager never starts and every request fails with
+  `Task group is not initialized. Make sure to use run()`. It only shows on `initialize`,
+  because a request rejected for auth never reaches the code needing the task group — so a
+  broken mount looks like a healthy server. The web client goes in via
+  `mcp._custom_starlette_routes`, which is private to the SDK and guarded by `hasattr` so a
+  version bump degrades to "no web page" instead of raising.
+- **`web/` must be in the Dockerfile `COPY` list**, not just mounted. A volume mount alone
+  leaves the file missing inside the image, and `_web_routes()` then returns `[]` — a clean
+  `404`, not an error.
+- **A browser cannot speak MCP.** The page has to do the `initialize` handshake itself and
+  echo `mcp-session-id` on every later request, or the server answers `400 Missing session
+  ID`. Replies arrive as SSE (`data: {...}` lines), so take the last complete frame.
 - **Indexing prunes deleted documents** and reports what it removed. One collection holds
   one corpus, so indexing a *different* directory than last time removes the previous
   directory's documents. That is intentional, not a bug.
