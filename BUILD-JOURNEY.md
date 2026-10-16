@@ -218,6 +218,8 @@ HTTP header, so stdio and the in-process `Client(mcp)` never see auth — a test
 | Retrieval at scale | `top-4` now dedupes across documents and chunks follow structure, but nothing has been measured above ~10 documents yet |
 | Prompt injection | Document text enters prompts unescaped |
 | Real auth | Static table: no expiry, revocation needs a restart. Per-tool scopes now split read from write |
+| Ran `DELETE` against the live Qdrant to prove it was exposed | It was — and it **deleted the index**. Rebuilt from the originals on disk in one command, which is the filesystem-as-source-of-truth design paying off, but the indexer had already been proven not to prune a corpus it cannot see |
+| Cloned the repo only at the very end | Every earlier check ran against the working tree, which is precisely where the `_comment` crash did not exist. The quickstart was the first test of the repo as a stranger receives it |
 | Injection via uploaded files | Not built. Whatever lands in `docs/` enters prompts unescaped, and the grounding prompt is the only guardrail |
 | Tool choice | The 7B still declines `answer_docs` on its own — the router's decision is now enforced rather than advisory, which works but is a patch over a prompt that misstates what the model knows |
 | Per-tool scopes | **done** — `docs:write` gates `refresh_index`. It was a live gap before any upload existed: a read-only token could rebuild the index |
