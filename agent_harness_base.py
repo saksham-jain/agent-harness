@@ -64,14 +64,18 @@ Route each question to the right tool:
 - answer_docs : ALWAYS use for questions about the user's own documents - their
                 notes, records, resumes, contracts, saved plans. Never answer
                 those from memory; they are not something you were trained on.
-- read_file   : files in the working directory
-- add         : arithmetic
+- read_file   : read a file in the working directory
+- write_file  : create or overwrite a file
+- bash        : run a shell command. Needs the user's confirmation.
+- load_skill  : load a playbook by name when a task matches one
+- add         : add two numbers. Use it for arithmetic rather than doing it yourself.
 - no tool     : general knowledge you already have
 
 Examples:
   "what did the lease say about termination?"  -> answer_docs
   "what did the interview notes say?"          -> answer_docs
   "what is in config.json?"                   -> read_file
+  "count the lines in setup.py"               -> bash
   "10 + 2"                                    -> add
   "who wrote Dune?"                           -> no tool, just answer"""
 
@@ -108,8 +112,30 @@ LOCAL_TOOLS = [
         "a skill description. Returns the instructions to follow.",
         ["name"],
     ),
+    tool(
+        "add",
+        "Add two numbers. Use this for arithmetic rather than doing it yourself.",
+        ["a", "b"],
+    ),
 ]
 LOCAL_NAMES = {t["function"]["name"] for t in LOCAL_TOOLS}
+
+
+def _as_number(v):
+    """Coerce a tool argument to a float.
+
+    Models send numbers as strings surprisingly often, so `"10"` has to work. Returns None
+    rather than raising, because the error belongs in the tool result the model reads — a
+    raised exception becomes a bare "Error executing tool add" with no explanation.
+    """
+    if isinstance(v, bool):  # bool is an int subclass; `True` is not the number 1 here
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return float(str(v).strip())
+    except (TypeError, ValueError):
+        return None
 
 
 def run_local_tool(name, args):
@@ -133,6 +159,16 @@ def run_local_tool(name, args):
             with open(args["path"], "w") as f:
                 f.write(args["content"])
             return f"Wrote {len(args['content'])} chars to {args['path']}"
+        if name == "add":
+            a, b = _as_number(args.get("a")), _as_number(args.get("b"))
+            if a is None or b is None:
+                return (
+                    f"Cannot add {args.get('a')!r} and {args.get('b')!r}: "
+                    "both must be numbers."
+                )
+            total = a + b
+            # Integers are the overwhelmingly common case and "11.0" reads like a bug.
+            return str(int(total)) if total.is_integer() else str(total)
         return f"Unknown tool: {name}"
     except Exception as e:
         return f"Error: {e}"
