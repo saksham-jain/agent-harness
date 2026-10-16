@@ -249,6 +249,30 @@ Anything else speaking MCP over HTTP works the same way:
 
 Set `MCP_WEB=0` to turn the page off and keep the surface protocol-only.
 
+### Which tools the page may call
+
+Safe parity with the terminal agent, not full parity. The terminal has 10 tools; the page
+gets the 5 that are safe to expose over a public URL.
+
+| Tool | Page | |
+|---|---|---|
+| `answer_docs`, `list_docs`, `index_status`, `whoami` | ✅ | read-only |
+| `refresh_index` | ⚠️ | behind a `confirm()`, the one mutation |
+| `bash`, `read_file`, `write_file`, `load_skill` | ❌ | not reachable, and deliberately so |
+| arithmetic | ✅ | computed in the browser, ~0.04 ms |
+
+The last row is not theatre. `10+1` sent to `answer_docs` costs **4.45s** and returns "no
+document matched"; computed locally it is instant and exact. Picking the right tool is a
+speed fix, not a feature.
+
+**`bash` and `write_file` are excluded on purpose.** They live in the *client* process, so
+the page cannot reach them anyway — but publishing a shell behind a URL that is public and a
+token that never expires is not a demo. Per-tool scopes would be the prerequisite for even
+`refresh_index` being comfortable.
+
+Arithmetic is parsed with a regex, never `eval`. It takes `10+1`, `what is 10+1` and
+`calculate 2.5*4`, and rejects `3-5 May` — a date range must not be read as subtraction.
+
 ## Where the GPU is used
 
 **Only on the host. The containers have no GPU and never will.**
