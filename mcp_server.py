@@ -124,6 +124,39 @@ def logged(fn):
     return wrapper
 
 
+def needs_scope(*scopes):
+    """Refuse the call unless the caller's token carries every named scope.
+
+    Applied under @logged so the type hints survive to the schema, and it raises
+    `ToolError` so the reason reaches the model — which is the point: a tool that answers
+    "you need docs:write" is retryable in a way that "Error executing tool" is not.
+
+    It lives here rather than in `auth.py` on purpose. Auth answers *does this token hold
+    the scope*; deciding how to complain about it is a tool-layer concern, and importing
+    `ToolError` into the auth module would couple token verification to the tool surface.
+
+    With auth off there is no token and nothing is refused, which is the same bargain the
+    rest of the server makes.
+    """
+
+    def decorator(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            missing = auth.missing_scopes(scopes)
+            if missing:
+                token = auth.whoami()
+                held = ", ".join(token.scopes or ()) if token else "none (auth disabled)"
+                raise ToolError(
+                    f"This tool needs {', '.join(missing)}, which this token does not have. "
+                    f"Held: {held}. Ask whoever issued the token for one that carries it."
+                )
+            return fn(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
 TOKEN_VERIFIER, AUTH_SETTINGS = auth.build()
 
 mcp = MCPServer(
@@ -196,9 +229,13 @@ def list_docs() -> list[DocInfo]:
 
 @mcp.tool(title="Re-index the documents")
 @logged
+@needs_scope(auth.WRITE_SCOPE)
 def refresh_index() -> str:
     """Re-scan the document directory and embed anything that changed. Call after
-    creating or editing files that should become searchable."""
+    creating or editing files that should become searchable.
+
+    This rewrites the index, so it needs a write-scoped token. A read-only caller gets told
+    so rather than being quietly allowed or quietly refused."""
     return rag_service.index()
 
 

@@ -217,7 +217,8 @@ HTTP header, so stdio and the in-process `Client(mcp)` never see auth — a test
 | Corpus | One 65-byte file, so retrieval numbers are an anecdote |
 | Retrieval at scale | `top-4` now dedupes across documents and chunks follow structure, but nothing has been measured above ~10 documents yet |
 | Prompt injection | Document text enters prompts unescaped |
-| Real auth | Static table: no expiry, revocation needs a restart |
+| Real auth | Static table: no expiry, revocation needs a restart. Per-tool scopes now split read from write |
+| Injection via uploaded files | Not built. Whatever lands in `docs/` enters prompts unescaped, and the grounding prompt is the only guardrail |
 | Tool choice | The 7B still declines `answer_docs` on its own — the router's decision is now enforced rather than advisory, which works but is a patch over a prompt that misstates what the model knows |
 | Per-tool scopes | `refresh_index` is a mutation and every token holds `docs:read` |
 

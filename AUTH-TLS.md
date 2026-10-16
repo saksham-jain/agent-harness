@@ -1,8 +1,8 @@
 # Auth + TLS
 
-Design and working notes. **Auth, the hostname, and the LAN exposure fix are implemented
-and verified.** What remains is the auth *model*, not the transport: a static token table
-with no expiry, and no per-tool scopes.
+Design and working notes. **Auth, the hostname, the LAN exposure fix, and per-tool scopes are
+implemented and verified.** What remains is the auth *model*: a static token table with no
+expiry, so possession is still identity.
 
 The current shape:
 
@@ -498,7 +498,7 @@ What would actually close this, in order of effort:
 
 | Step | Cost | Effect |
 | --- | --- | --- |
-| Per-tool scopes — read vs index | small | a leaked token cannot rewrite the index |
+| ~~Per-tool scopes — read vs index~~ | **done** | a leaked read token cannot rewrite the index |
 | Token expiry | small | a stolen token stops working on its own |
 | A real hostname on a Cloudflare zone + Access | ~$10/yr + config | OAuth in front; **no token in the browser at all** |
 
@@ -539,7 +539,7 @@ That makes `.gitignore` load-bearing rather than tidy. A lease or a passport sca
 | 5 | A hostname + real certificate | **done** — Tailscale Funnel, Let's Encrypt cert |
 | 6 | `get_access_token()` → tenant resolution | blocks multi-user |
 | 7 | `doc_id` replacing path keys | **done** — relative to the docs directory |
-| 8 | Scope checks per tool — split read from write | no |
+| 8 | Scope checks per tool — split read from write | **done** — `docs:write` gates `refresh_index` |
 
 Steps 1–5 leave the server safe on one machine and reachable by name. Steps 6 and 8 are
 what make it safe for many users. Two of the four original problems were only ever

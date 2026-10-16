@@ -2,14 +2,21 @@
   "_comment": [
     "Copy to tokens.json and fill in. NEVER commit the real file.",
     "Each key is a bearer token; the value says who it belongs to and what it may do.",
-    "Scopes are checked by the SDK against MCP_REQUIRED_SCOPES on every request, so a",
-    "token missing the required scope is rejected before any tool runs.",
+    "",
+    "Two kinds of scope, checked differently:",
+    "  MCP_REQUIRED_SCOPES is a floor. The SDK applies it to EVERY request with AND",
+    "  semantics, so never put a write scope there or every read-only token needs it.",
+    "  Per-tool scopes are declared with @needs_scope() in mcp_server.py and checked",
+    "  against the token's own scopes. refresh_index needs docs:write.",
+    "",
+    "A token that omits 'scopes' falls back to MCP_REQUIRED_SCOPES, so an entry written",
+    "before per-tool scopes existed is read-only rather than accidentally privileged.",
     "Generate with: python3 -c \"import secrets; print(secrets.token_urlsafe(32))\""
   ],
   "tok_replace_me_saksham": {
     "subject": "saksham",
     "client_id": "claude-code",
-    "scopes": ["docs:read"]
+    "scopes": ["docs:read", "docs:write"]
   },
   "tok_replace_me_bob": {
     "subject": "bob",
