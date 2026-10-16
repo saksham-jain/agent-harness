@@ -15,3 +15,12 @@ tokens.json
 .certs/
 *.pem
 *.key
+
+# Real documents. The index is derived from these, and pruning treats this directory as the
+# source of truth — a document deleted here is deleted from the index — which makes these
+# files the only copy. Keeping them out of git is the point: a lease or a passport scan must
+# never reach history, and .gitignore is the only thing that stops it.
+#
+# docs.sample/ is committed and is what the evals index. Point DOCS_DIR at docs.sample to
+# run them, or at docs for your own corpus.
+docs/

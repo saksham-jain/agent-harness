@@ -505,6 +505,29 @@ What would actually close this, in order of effort:
 The last one is the only change that removes the credential from the client, and it is the
 one that needs money — which is why the page stores a token instead.
 
+### Where documents live
+
+Two directories, one committed and one not:
+
+| | |
+|---|---|
+| `docs.sample/` | committed. One small file, `test.md`, and all 13 eval cases expect it |
+| `docs/` | **gitignored.** Your real documents |
+
+`DOCS_DIR` selects which, and compose defaults to `docs.sample` so a fresh clone indexes
+something. Set `DOCS_DIR=./docs` in `.env` for your own corpus.
+
+The reason for the split is that these files are the *only* copy. The index stores chunk
+text, but pruning treats the filesystem as the source of truth, so a document deleted from
+disk is deleted from the index — and re-indexing after a chunking or embedding change needs
+the source. Verified: chunk text can be reassembled losslessly for plain text, but a PDF
+cannot be recovered from `pypdf`'s extraction, so a badly parsed original is unrecoverable
+without re-uploading it.
+
+That makes `.gitignore` load-bearing rather than tidy. A lease or a passport scan dropped in
+`docs/` would be committed and stay in history permanently — the same failure mode as
+`tokens.json` and `.certs/`, which are ignored for the same reason.
+
 ## Order of work
 
 | # | Step | State |
