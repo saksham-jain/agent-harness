@@ -69,14 +69,24 @@ def load_tokens():
 
     Otherwise read MCP_TOKENS_FILE. Nothing here is hashed or encrypted -- it is a
     lookup table, and the file must not be world-readable in production.
+
+    Entries that are not token records are dropped rather than passed on. `tokens.example.json`
+    ships a `_comment` list for humans, so a fresh clone's table contains a non-dict value, and
+    verifying against it used to raise AttributeError inside verify_token -- an unhandled
+    exception on the request path instead of the clean 401 a bad token should get.
     """
     raw = os.getenv("MCP_TOKENS")
-    if raw:
-        return json.loads(raw)
-    if os.path.isfile(TOKENS_FILE):
+    table = json.loads(raw) if raw else None
+    if table is None:
+        if not os.path.isfile(TOKENS_FILE):
+            return {}
         with open(TOKENS_FILE) as f:
-            return json.load(f)
-    return {}
+            table = json.load(f)
+    return {
+        k: v
+        for k, v in table.items()
+        if isinstance(v, dict) and not k.startswith("_")
+    }
 
 
 def build():

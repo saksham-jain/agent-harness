@@ -72,6 +72,11 @@ exception surfaces as a bare `Error executing tool X` with the traceback in the 
 - **Rebuild after changing the Dockerfile.** Compose keeps a *separate image per service*,
   so a stale one can carry an old `ENTRYPOINT` that silently swallows a `command:`
   override. This caused a service to run with the wrong argv.
+- **A token table entry must be a dict.** `tokens.example.json` ships a `_comment` list for
+  humans, so a fresh clone's table contains a non-dict value; verifying against it raised
+  `AttributeError` inside `verify_token` — an unhandled exception on the request path instead
+  of the clean 401 a bad token deserves. `load_tokens()` now drops non-dict entries and keys
+  starting with `_`. Found by writing a quickstart and actually cloning the repo.
 - **`tokens.json` and `.env` are gitignored.** Do not commit them. `.certs/` holds a
   private key. **`docs/` is gitignored too, and for a stronger reason:** pruning treats it
   as the source of truth, so those files are the only copy — and once something is in git

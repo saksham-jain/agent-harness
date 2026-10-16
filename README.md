@@ -3,6 +3,44 @@
 A local agent that acts on your files and answers from your document corpus. Ollama for
 inference, Qdrant for vectors, MCP between the layers, Docker Compose to run it.
 
+## Quickstart
+
+Verified on a fresh clone. Needs [Ollama](https://ollama.com) running with
+`ollama pull qwen2.5:7b && ollama pull nomic-embed-text`, and Docker.
+
+```bash
+cp tokens.example.json tokens.json          # 1. a token table; keys are the tokens
+mkdir -p docs && cp docs.sample/test.md docs/   # 2. somewhere to keep documents
+docker compose --profile index run --rm index    # 3. embed them
+```
+
+Then either the terminal agent or the browser client:
+
+```bash
+docker compose --profile client run --rm mcp-client
+# or open http://localhost:8000 and paste a token from tokens.json
+```
+
+```
+> how long is the hotel booked for?
+[route] documents
+[tool:mcp] answer_docs(...)
+The hotel is booked for 3 nights [1].
+```
+
+**Three things the clone does not contain, and why.** `tokens.json` and `docs/` are
+gitignored — the first holds bearer tokens, the second is where *your* documents live, and
+neither belongs in a public repository. `docs.sample/` is the committed copy the evals use.
+A missing `docs/` is not an error state: the indexer refuses rather than pruning a corpus it
+cannot see.
+
+## Use it from your own documents
+
+Drop anything into `docs/` — `.txt .md .pdf .csv .json .py .js .ts` — then
+`docker compose --profile index run --rm index`. Files are chunked on structure, embedded, and
+searchable. Delete a file and the next run prunes it; the index is derived from the directory,
+so the files are the only copy.
+
 ## What's used
 
 | Component | Detail |
