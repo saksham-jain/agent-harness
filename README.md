@@ -15,6 +15,7 @@ inference, Qdrant for vectors, MCP between the layers, Docker Compose to run it.
 | Runtime | Python 3.11 (`python:3.11-slim`), Docker Compose |
 | Retrieval | Structure-aware chunks (~800 char target, 100 overlap), top-4 after per-document dedup |
 | Streaming | `answer_docs` streams tokens as MCP progress notifications. Ollama `stream: true` + `ctx.report_progress()` |
+| Web client | `web/index.html` at `/` — same origin as `/mcp`, so a phone browser works with no app. Set `MCP_WEB=0` to disable |
 | Tracing | **planned — LangSmith.** The MCP SDK already emits an OpenTelemetry span per request, but router / retrieval / embedding / generation are one opaque span |
 | Auth | OAuth 2.1 resource server. `TokenVerifier` + `AuthSettings`, scopes `docs:read`. Static bearer tokens — **not** production auth |
 | Auth libs | `mcp.server.auth.*`, `pydantic` `2.13.5`, `httpx2` `2.13.0` (client side) |
@@ -211,6 +212,66 @@ Design, and what is still missing: **[AUTH-TLS.md](AUTH-TLS.md)**.
 Roadmap: **[ENHANCEMENTS.md](ENHANCEMENTS.md)**.
 How the project got here, mistakes included: **[BUILD-JOURNEY.md](BUILD-JOURNEY.md)**.
 Rules for agents and contributors: **[AGENTS.md](AGENTS.md)**.
+
+## Use it from a phone
+
+`web/index.html` is served at `/`, same origin as `/mcp`. Open the hostname in any phone
+browser, paste a bearer token once, and it works — no app, no build step, no framework.
+
+```
+https://sakshams-macbook-air.tailf61e07.ts.net/
+```
+
+The page is a real MCP client: it runs `initialize`, keeps the `mcp-session-id` it gets
+back, and sends it on every later request. Skipping that handshake gets `400 Missing session
+ID`, and replies arrive as SSE frames rather than one JSON body.
+
+Same origin is the point — no CORS preflight, and no second hostname to remember.
+
+**The token lives in `localStorage` on a public hostname.** That is the same trust boundary
+as the API itself — the Funnel hostname is reachable by anyone, and the token never expires
+— so this does not weaken anything, but it does mean a shared browser profile should not
+keep it. See [AUTH-TLS.md](AUTH-TLS.md) for what would close that.
+
+Anything else speaking MCP over HTTP works the same way:
+
+```json
+{
+  "mcpServers": {
+    "agent-harness": {
+      "type": "http",
+      "url": "https://sakshams-macbook-air.tailf61e07.ts.net/mcp",
+      "headers": { "Authorization": "Bearer tok_saksham_..." }
+    }
+  }
+}
+```
+
+Set `MCP_WEB=0` to turn the page off and keep the surface protocol-only.
+
+### Which tools the page may call
+
+Safe parity with the terminal agent, not full parity. The terminal has 10 tools; the page
+gets the 5 that are safe to expose over a public URL.
+
+| Tool | Page | |
+|---|---|---|
+| `answer_docs`, `list_docs`, `index_status`, `whoami` | ✅ | read-only |
+| `refresh_index` | ⚠️ | behind a `confirm()`, the one mutation |
+| `bash`, `read_file`, `write_file`, `load_skill` | ❌ | not reachable, and deliberately so |
+| arithmetic | ✅ | computed in the browser, ~0.04 ms |
+
+The last row is not theatre. `10+1` sent to `answer_docs` costs **4.45s** and returns "no
+document matched"; computed locally it is instant and exact. Picking the right tool is a
+speed fix, not a feature.
+
+**`bash` and `write_file` are excluded on purpose.** They live in the *client* process, so
+the page cannot reach them anyway — but publishing a shell behind a URL that is public and a
+token that never expires is not a demo. Per-tool scopes would be the prerequisite for even
+`refresh_index` being comfortable.
+
+Arithmetic is parsed with a regex, never `eval`. It takes `10+1`, `what is 10+1` and
+`calculate 2.5*4`, and rejects `3-5 May` — a date range must not be read as subtraction.
 
 ## Where the GPU is used
 

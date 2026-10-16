@@ -446,6 +446,65 @@ Turn it off again with `MCP_AUTH=0` in `.env`.
 template. Tokens are stored in plaintext — it is a lookup table, not a hash — so the file
 is `chmod 600`.
 
+### Host allowlist and Origin are two different lists
+
+`TransportSecuritySettings` validates the **`Host`** header and the **`Origin`** header
+against separate allowlists. Allowlisting the host is not sufficient for a browser, and the
+failure is worth writing down because it is easy to misread:
+
+```
+WARNING mcp.server.transport_security: Invalid Origin header: https://<host>
+POST /mcp  → 403 Forbidden
+```
+
+A browser always sends `Origin`; a command-line or scripted client normally does not, which
+is why this passed every test that existed before there was a page. The `403` arrives
+**before authentication**, so a valid token looks invalid — and the log line names the
+hostname, not the credential.
+
+`allowed_origins` is therefore derived from `MCP_RESOURCE_URL` rather than configured
+separately: it is the same string that already has to be correct for tokens to verify, so
+the two cannot drift apart. Override with `MCP_ALLOWED_ORIGINS`.
+
+## Reaching it from elsewhere
+
+Verified from outside the machine, with a hand-rolled client over the tunnel:
+
+| Check | Result |
+| --- | --- |
+| `initialize` | session issued, **0.10s** |
+| `whoami` | `subject=saksham ... scopes=docs:read` |
+| `answer_docs` | grounded answer in 11.7s, score 0.59 |
+| Abstention path | says it does not know, as intended |
+| No token | `401` |
+| No IP restriction | none — `MCP_ALLOWED_HOSTS` filters the `Host` header, not the client |
+
+The discovery document at `/.well-known/oauth-protected-resource/mcp` is **public**: it
+returns `200` without a token and discloses the resource URL, the issuer, and the scopes.
+That is what the spec asks for, and it is how a client finds out where to authenticate — but
+it does mean anyone can learn the hostname, so the token is the only barrier.
+
+### The browser client and what it costs
+
+`web/index.html` stores the bearer token in `localStorage` and sends it from the browser.
+That does not widen the trust boundary — the API is already reachable by anyone with the URL,
+and the token already has no expiry — but it does mean:
+
+- **A shared or compromised browser profile keeps a permanent credential** to the corpus.
+- **There is no way to scope it.** `refresh_index` is a mutation, and every token currently
+  holds `docs:read`, which is all that is checked.
+
+What would actually close this, in order of effort:
+
+| Step | Cost | Effect |
+| --- | --- | --- |
+| Per-tool scopes — read vs index | small | a leaked token cannot rewrite the index |
+| Token expiry | small | a stolen token stops working on its own |
+| A real hostname on a Cloudflare zone + Access | ~$10/yr + config | OAuth in front; **no token in the browser at all** |
+
+The last one is the only change that removes the credential from the client, and it is the
+one that needs money — which is why the page stores a token instead.
+
 ## Order of work
 
 | # | Step | State |

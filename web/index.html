@@ -1,0 +1,286 @@
+<!doctype html>
+<!--
+  A phone-usable client for the MCP server on this same origin.
+
+  Deliberately no framework and no build step: this is one file, opened from a phone
+  browser, and a build toolchain would cost more than it explains. Same origin as /mcp
+  is the point - it means no CORS preflight and no second hostname to remember.
+
+  The bearer token is held in localStorage and sent by the browser, so anything that can
+  reach this page can reach the API too. That is the same trust boundary as the API
+  itself: the Funnel hostname is public and this token never expires. See AUTH-TLS.md.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Docs agent</title>
+<style>
+  :root { color-scheme: light dark; --bg:#0f1115; --fg:#e8eaed; --dim:#9aa0a6;
+          --line:#2a2f3a; --accent:#7aa2f7; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#fafbfc; --fg:#1a1d21; --dim:#5f6670; --line:#dfe3e8; --accent:#2f5fd0; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:16px/1.5 -apple-system,system-ui,sans-serif;
+         height:100dvh; display:flex; flex-direction:column; }
+  header { padding:12px 16px; border-bottom:1px solid var(--line);
+           display:flex; gap:10px; align-items:center; flex:0 0 auto; }
+  header h1 { font-size:15px; margin:0; font-weight:600; flex:1; }
+  header span { font-size:12px; color:var(--dim); }
+  #log { flex:1 1 auto; overflow-y:auto; padding:16px; display:flex;
+         flex-direction:column; gap:12px; -webkit-overflow-scrolling:touch; }
+  .msg { max-width:88%; padding:10px 13px; border-radius:14px; white-space:pre-wrap;
+         word-wrap:break-word; }
+  .me { align-self:flex-end; background:var(--accent); color:#fff; }
+  .bot { align-self:flex-start; background:transparent; border:1px solid var(--line); }
+  .bot.thinking { color:var(--dim); font-style:italic; }
+  .src { font-size:12px; color:var(--dim); margin-top:6px;
+         border-top:1px solid var(--line); padding-top:6px; }
+  #bar { display:flex; gap:8px; padding:10px 12px calc(10px + env(safe-area-inset-bottom));
+         border-top:1px solid var(--line); flex:0 0 auto; }
+  #modes { display:flex; gap:6px; padding:0 12px 8px; overflow-x:auto; flex:0 0 auto; }
+  #modes button { padding:7px 13px; font-size:13px; border-radius:16px; white-space:nowrap;
+                  border:1px solid var(--line); background:transparent; color:var(--dim); }
+  #modes button[aria-pressed="true"] { background:var(--accent); color:#fff;
+                                      border-color:var(--accent); font-weight:600; }
+  #q { flex:1; padding:11px 14px; font-size:16px; border-radius:20px;
+       border:1px solid var(--line); background:transparent; color:var(--fg); }
+  #go { padding:11px 18px; border-radius:20px; border:0; background:var(--accent);
+       color:#fff; font-weight:600; }
+  #gate { padding:20px 16px; display:flex; flex-direction:column; gap:10px; }
+  #gate input { padding:12px 14px; font-size:16px; border-radius:10px;
+                border:1px solid var(--line); background:transparent; color:var(--fg); }
+  #gate p { font-size:13px; color:var(--dim); margin:0; }
+  button.link { background:none; border:0; color:var(--accent); padding:0; font-size:13px; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Docs agent</h1>
+  <span id="who"></span>
+</header>
+
+<div id="gate">
+  <p><strong>Paste your bearer token.</strong> It is stored in this browser only, and sent
+     as <code>Authorization: Bearer</code>. Anyone holding it can read the corpus.</p>
+  <input id="tok" type="password" placeholder="tok_..." autocomplete="off" autocapitalize="off" spellcheck="false">
+  <button id="save" class="link" style="align-self:flex-start">Connect</button>
+  <button id="forget" class="link" style="align-self:flex-start" hidden>Forget token</button>
+  <p id="gateerr"></p>
+</div>
+
+<div id="log" hidden></div>
+
+<div id="modes" hidden></div>
+
+<form id="bar" hidden autocomplete="off">
+  <input id="q" placeholder="Ask your documents…" enterkeyhint="send">
+  <button id="go" type="submit">Send</button>
+</form>
+
+<script>
+// MCP Streamable HTTP needs a handshake before anything else works: `initialize` returns
+// an mcp-session-id header that every later request must echo back. Without it the server
+// answers 400 "Missing session ID", which looks like a broken server rather than a missed
+// step. Progress notifications arrive on the same response, so the reply streams in.
+const MCP_URL = location.origin + '/mcp';
+let session = null;
+
+// Tool names the page is allowed to call. Deliberately not the full set the server
+// exposes: `refresh_index` rewrites the index, so it is behind an explicit confirmation
+// rather than being one tap away like a read.
+//
+// The terminal agent also has bash, read_file, write_file and load_skill. Those live in
+// the *client* process, not the server, so this page cannot reach them anyway - and it
+// should not: a public URL guarded by a token that never expires is the wrong place to
+// publish a shell.
+const READ_TOOLS = {
+  docs:     { name: 'answer_docs',  label: 'Documents', args: { query: '' } },
+  list:     { name: 'list_docs',    label: 'What is indexed' },
+  status:   { name: 'index_status', label: 'Index status' },
+  who:      { name: 'whoami',       label: 'Who am I' },
+};
+const WRITE_TOOLS = {
+  reindex:  { name: 'refresh_index', label: 'Re-index', confirm:
+              'This re-embeds every changed file and rewrites the index. Continue?' },
+};
+
+const $ = (id) => document.getElementById(id);
+const log = $('log');
+
+function say(text, who, src) {
+  const d = document.createElement('div');
+  d.className = 'msg ' + who;
+  d.textContent = text;
+  if (src) {
+    const s = document.createElement('div');
+    s.className = 'src';
+    s.textContent = src;
+    d.appendChild(s);
+  }
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+  return d;
+}
+
+async function rpc(method, params) {
+  const headers = {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json, text/event-stream',
+    'Authorization': 'Bearer ' + localStorage.getItem('mcp_token'),
+  };
+  if (session) headers['mcp-session-id'] = session;
+
+  const res = await fetch(MCP_URL, {
+    method: 'POST', headers,
+    body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }),
+  });
+  const got = res.headers.get('mcp-session-id');
+  if (got) session = got;
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+
+  // Streamable HTTP replies as SSE: `data: {json}` lines. The last one is the result, so
+  // keep the newest complete frame rather than the whole buffer.
+  const raw = await res.text();
+  let last = null;
+  for (const line of raw.split('\n')) {
+    if (line.startsWith('data:')) {
+      try { last = JSON.parse(line.slice(5).trim()); } catch (_) {}
+    }
+  }
+  if (!last) throw new Error('no JSON-RPC frame in reply');
+  if (last.error) throw new Error(last.error.message || 'server error');
+  return last.result;
+}
+
+async function connect() {
+  $('gateerr').textContent = '';
+  const t = $('tok').value.trim();
+  if (!t) return;
+  localStorage.setItem('mcp_token', t);
+  session = null;
+  try {
+    await rpc('initialize', {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'web', version: '1' },
+    });
+    // Notifications need no reply, so fire and forget rather than awaiting a result.
+    await fetch(MCP_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/event-stream',
+        'Authorization': 'Bearer ' + t,
+        'mcp-session-id': session,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+    });
+    const me = await rpc('tools/call', { name: 'whoami', arguments: {} });
+    $('who').textContent = (me.content[0].text || '').slice(0, 40);
+    $('gate').hidden = true; $('log').hidden = false; $('bar').hidden = false; $('modes').hidden = false;
+    renderModes();
+    $('forget').hidden = false;
+    $('q').focus();
+  } catch (e) {
+    localStorage.removeItem('mcp_token');
+    $('gateerr').textContent = 'Could not connect: ' + e.message +
+      ' — a token must be valid and must match the URL above exactly.';
+  }
+}
+
+$('save').onclick = connect;
+$('tok').addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(); });
+$('forget').onclick = () => { localStorage.clear(); location.reload(); };
+
+// Arithmetic is answered here rather than sent anywhere. A round trip to answer_docs costs
+// seconds and returns "no document matched" for 10+1; this costs microseconds and is exact.
+//
+// Two shapes are accepted: a bare expression, and the same expression inside a short
+// sentence ("what is 10+1"), because that is how people actually type it. The filler words
+// are matched explicitly rather than stripped, so a date range like "3-5 May" is left alone
+// instead of being read as minus. Deliberately a regex rather than eval: this string comes
+// from a text box on a page reachable from the internet.
+const FILLER = /^\s*(?:what(?:'| i)s|whats|calculate|compute|how much is|what does)\s+/i;
+const ARITH = /^\s*(-?\d+(?:\.\d+)?)\s*([+\-*])\s*(-?\d+(?:\.\d+)?)\s*[?=.]?\s*$/;
+
+function tryArith(q) {
+  const stripped = q.replace(FILLER, '');
+  const m = ARITH.exec(stripped);
+  if (!m) return null;
+  const a = parseFloat(m[1]), b = parseFloat(m[3]);
+  const out = m[2] === '+' ? a + b : m[2] === '-' ? a - b : a * b;
+  // Trim float noise: 0.1 + 0.2 must not print 0.30000000000000004.
+  const shown = Math.abs(out) < 1e15 ? parseFloat(out.toPrecision(12)) : out;
+  return { text: String(shown), note: 'computed in your browser — no server call' };
+}
+
+let mode = 'docs';
+
+function renderModes() {
+  const box = $('modes');
+  box.textContent = '';
+  const all = { ...READ_TOOLS, ...WRITE_TOOLS };
+  for (const [key, t] of Object.entries(all)) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = t.label;
+    b.setAttribute('aria-pressed', String(key === mode));
+    b.onclick = () => { mode = key; renderModes(); };
+    box.appendChild(b);
+  }
+}
+
+$('bar').onsubmit = async (e) => {
+  e.preventDefault();
+  const q = $('q').value.trim();
+  if (!q) return;
+  $('q').value = '';
+  say(q, 'me');
+
+  const tool = mode === 'docs' ? READ_TOOLS.docs : (READ_TOOLS[mode] || WRITE_TOOLS[mode]);
+
+  // Documents mode handles arithmetic locally; everything else passes the text through.
+  if (mode === 'docs') {
+    const fast = tryArith(q);
+    if (fast) {
+      const d = say(fast.text, 'bot');
+      const s = document.createElement('div');
+      s.className = 'src';
+      s.textContent = fast.note;
+      d.appendChild(s);
+      return;
+    }
+  }
+
+  if (tool.confirm && !confirm(tool.confirm)) return;
+
+  const pending = say('Working…', 'bot thinking');
+  try {
+    const args = tool.args ? { query: q } : {};
+    const r = await rpc('tools/call', { name: tool.name, arguments: args });
+    const text = r.content[0].text || '';
+    const cut = text.indexOf('\n\nSources:');
+    pending.classList.remove('thinking');
+    pending.textContent = cut > 0 ? text.slice(0, cut) : text;
+    if (cut > 0) {
+      const s = document.createElement('div');
+      s.className = 'src';
+      s.textContent = text.slice(cut + 2).replace(/\s*\n\s*/g, ' ');
+      pending.appendChild(s);
+    }
+    log.scrollTop = log.scrollHeight;
+  } catch (err) {
+    pending.classList.remove('thinking');
+    pending.textContent = 'Failed: ' + err.message;
+  }
+};
+
+if (localStorage.getItem('mcp_token')) { $('tok').value = localStorage.getItem('mcp_token'); connect(); }
+</script>
+</body>
+</html>
