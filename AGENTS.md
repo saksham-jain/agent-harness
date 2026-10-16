@@ -80,6 +80,16 @@ exception surfaces as a bare `Error executing tool X` with the traceback in the 
   rejects every request.
 - **`Answer` latency is ~17–37s**, dominated by a CPU-bound 7B generation. Budget per tool
   call, not per turn. `MCP_TIMEOUT` must cover a whole call.
+- **An empty docs directory must prune, a missing one must refuse.** `index()` treats the
+  filesystem as the source of truth, so a directory that exists and holds nothing indexable
+  means the corpus is gone and the index should follow it down. A directory that does not
+  exist is far more likely a typo or an unmounted volume, so it refuses and prunes nothing.
+  Collapsing the two left deleted documents searchable forever: `index()` returned before
+  `_prune()` ran, and `No supported files found` read like a harmless no-op while the entire
+  previous corpus stayed live.
+- **A file that fails to read stays indexed.** `doc_id` is added to `seen` *before*
+  `read_file()`, so a corrupt PDF or a permissions error cannot delete a document's own
+  earlier chunks. A read error is not a deletion — do not move `seen.add()` after the read.
 - **Document identity is `doc_id`**, the path relative to the docs directory — never the
   absolute path. Absolute paths as keys are what made host and container indexing produce
   two sets of points.
