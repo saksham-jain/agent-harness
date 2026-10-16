@@ -37,7 +37,10 @@ services:
       - MCP_TLS_CERT=${MCP_TLS_CERT:-}
       - MCP_TLS_KEY=${MCP_TLS_KEY:-}
     volumes:
-      - ${DOCS_DIR:-./docs}:/docs:ro
+      # Defaults to the committed sample corpus so a fresh clone indexes something.
+      # Set DOCS_DIR=./docs in .env for your own documents; that directory is
+      # gitignored, and a missing one makes the indexer refuse rather than prune.
+      - ${DOCS_DIR:-./docs.sample}:/docs:ro
       # The browser client at `/`. Read-only; the server only ever reads it. Baked into the
       # image too, so this mount is only needed to edit the page without a rebuild.
       - ./web:/work/web:ro
@@ -111,4 +114,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       # Read-only: the indexer only ever reads documents, writes go to Qdrant.
-      - ${DOCS_DIR:-./docs}:/docs:ro
+      # Defaults to the committed sample corpus so a fresh clone indexes something.
+      # Set DOCS_DIR=./docs in .env for your own documents; that directory is
+      # gitignored, and a missing one makes the indexer refuse rather than prune.
+      - ${DOCS_DIR:-./docs.sample}:/docs:ro

@@ -73,7 +73,10 @@ exception surfaces as a bare `Error executing tool X` with the traceback in the 
   so a stale one can carry an old `ENTRYPOINT` that silently swallows a `command:`
   override. This caused a service to run with the wrong argv.
 - **`tokens.json` and `.env` are gitignored.** Do not commit them. `.certs/` holds a
-  private key.
+  private key. **`docs/` is gitignored too, and for a stronger reason:** pruning treats it
+  as the source of truth, so those files are the only copy — and once something is in git
+  history, removing it does not remove it. `docs.sample/` is the committed corpus the evals
+  use; `DOCS_DIR` picks which.
 - **`MCP_RESOURCE_URL` must equal the URL clients dial**, exactly. It names the resource a
   token is issued for; a mismatch verifies locally and is rejected remotely.
 - **`MCP_ALLOWED_HOSTS` must include the port clients use**, or DNS-rebinding protection
