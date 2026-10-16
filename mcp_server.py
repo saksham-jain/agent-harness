@@ -64,6 +64,10 @@ TLS_KEY = os.getenv("MCP_TLS_KEY", "")
 # Serve web/index.html at `/`, so a phone browser can talk to this over the Funnel.
 # Off by default: it is a convenience, not part of the protocol surface.
 WEB_ENABLED = os.getenv("MCP_WEB", "1") not in ("0", "false", "")
+
+# Staged document upload. Requires WEB_ENABLED, since the page is how you drive it.
+# Uploads land in uploads/pending/ and are indexed only when approved.
+WEB_UPLOAD = os.getenv("MCP_UPLOAD", "1") not in ("0", "false", "")
 LOG_LEVEL = os.getenv("MCP_LOG_LEVEL", "INFO")
 
 logging.basicConfig(
@@ -301,7 +305,15 @@ def _web_routes():
     async def index(_request):
         return FileResponse(page, media_type="text/html")
 
-    return [Route("/", endpoint=index)]
+    out = [Route("/", endpoint=index)]
+    if WEB_UPLOAD:
+        try:
+            import upload
+
+            out.extend(upload.routes())
+        except Exception as e:  # a broken upload module must not take the server down
+            log.warning("upload routes unavailable: %s", e)
+    return out
 
 
 if __name__ == "__main__":

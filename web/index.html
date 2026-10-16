@@ -55,6 +55,25 @@
   #gate p { font-size:13px; color:var(--dim); margin:0; }
   button.link { background:none; border:0; color:var(--accent); padding:0; font-size:13px; }
   [hidden] { display:none !important; }
+  #library { flex:0 0 auto; max-height:52dvh; overflow-y:auto; padding:4px 16px 12px;
+             border-bottom:1px solid var(--line); -webkit-overflow-scrolling:touch; }
+  #library h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em;
+               color:var(--dim); margin:16px 0 6px; font-weight:600; }
+  #library .hint { font-size:12.5px; color:var(--dim); margin:4px 0 8px; }
+  #library .status { font-size:13px; margin:6px 0 0; }
+  #library .row { display:flex; align-items:center; gap:8px; padding:7px 0;
+                 border-bottom:1px solid var(--line); }
+  #library .row:last-child { border-bottom:0; }
+  #library .grow { flex:1; min-width:0; overflow-wrap:anywhere; font-size:14.5px; }
+  #library .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; }
+  #library button { padding:7px 12px; font-size:13px; border-radius:8px; border:1px solid var(--line);
+                    background:transparent; color:var(--fg); }
+  #library button.danger { color:#e5534b; border-color:#e5534b55; }
+  #library button:disabled { opacity:.5; }
+  form.up { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  form.up input[type=file] { flex:1; min-width:0; font-size:13px; color:var(--dim); }
+  form.up button { padding:9px 16px; background:var(--accent); color:#fff;
+                   border-color:var(--accent); font-weight:600; }
 </style>
 </head>
 <body>
@@ -74,6 +93,8 @@
 </div>
 
 <div id="log" hidden></div>
+
+<div id="library" hidden></div>
 
 <div id="modes" hidden></div>
 
@@ -100,7 +121,6 @@ let session = null;
 // publish a shell.
 const READ_TOOLS = {
   docs:     { name: 'answer_docs',  label: 'Documents', args: { query: '' } },
-  list:     { name: 'list_docs',    label: 'What is indexed' },
   status:   { name: 'index_status', label: 'Index status' },
   who:      { name: 'whoami',       label: 'Who am I' },
 };
@@ -221,17 +241,150 @@ function tryArith(q) {
 
 let mode = 'docs';
 
+const LIBRARY = { label: 'Library' };
+
 function renderModes() {
   const box = $('modes');
   box.textContent = '';
-  const all = { ...READ_TOOLS, ...WRITE_TOOLS };
+  const all = { ...READ_TOOLS, ...WRITE_TOOLS, library: LIBRARY };
   for (const [key, t] of Object.entries(all)) {
     const b = document.createElement('button');
     b.type = 'button';
     b.textContent = t.label;
     b.setAttribute('aria-pressed', String(key === mode));
-    b.onclick = () => { mode = key; renderModes(); };
+    b.onclick = () => {
+      mode = key;
+      renderModes();
+      // The panel is a view, not a mode: it stays out of the way until asked for, and the
+      // chat bar below still sends whatever mode is selected.
+      if (key === 'library') openLibrary(); else $('library').hidden = true;
+    };
     box.appendChild(b);
+  }
+}
+
+// ---------------------------------------------------------------- library panel
+
+// Plain fetch rather than the MCP rpc() helper: these are ordinary REST routes, not
+// JSON-RPC, and they answer with a JSON body rather than SSE.
+async function rest(path, opts = {}) {
+  const headers = { Authorization: 'Bearer ' + localStorage.getItem('mcp_token') };
+  if (opts.body) headers['Content-Type'] = 'application/json';
+  const res = await fetch(path, { ...opts, headers });
+  const text = await res.text();
+  let data = {};
+  try { data = JSON.parse(text); } catch (_) {}
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
+async function openLibrary() {
+  const d = $('library');
+  d.hidden = false;
+  d.textContent = '';
+  d.appendChild(el('p', 'hint', 'Loading…'));
+  try {
+    const [indexed, pending] = await Promise.all([rest('/docs'), rest('/uploads')]);
+    d.textContent = '';
+
+    // --- upload
+    const form = el('form', 'up');
+    const file = el('input');
+    file.type = 'file';
+    // Advisory only. The server enforces the real allowlist; this just avoids a
+    // round trip for the common case of picking something obviously wrong.
+    file.accept = '.txt,.md,.pdf,.csv,.json,.py,.js,.ts';
+    const btn = el('button', null, 'Upload');
+    btn.type = 'submit';
+    form.append(file, btn);
+    const note = el('p', 'hint',
+      'Uploaded files wait in pending/. Nothing is searchable until you approve it — a ' +
+      'document can contain text that tries to steer the model, so read it first.');
+    const status = el('p', 'status');
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      if (!file.files.length) return;
+      status.textContent = 'Uploading…';
+      btn.disabled = true;
+      try {
+        const fd = new FormData();
+        fd.append('file', file.files[0]);
+        const res = await fetch('/upload', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + localStorage.getItem('mcp_token') },
+          body: fd,
+        });
+        const body = await res.json();
+        if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+        status.textContent = `Staged ${body.staged} (${body.bytes} bytes). Not indexed yet.`;
+        file.value = '';
+        openLibrary();
+      } catch (err) {
+        status.textContent = 'Upload failed: ' + err.message;
+      }
+      btn.disabled = false;
+    };
+    d.append(form, note, status);
+
+    // --- pending, each with its own approve / reject
+    d.appendChild(el('h2', null, 'Waiting for review'));
+    if (!pending.pending.length) {
+      d.appendChild(el('p', 'hint', 'Nothing pending.'));
+    }
+    for (const p of pending.pending) {
+      const row = el('div', 'row');
+      row.appendChild(el('span', 'grow', `${p.name} · ${p.bytes} bytes`));
+      const ok = el('button', null, 'Approve');
+      ok.onclick = async () => {
+        ok.disabled = no.disabled = true;
+        try {
+          const r = await rest('/uploads/approve', {
+            method: 'POST',
+            body: JSON.stringify({ name: p.name }),
+          });
+          say(`Approved ${r.doc_id} — ${r.chunks} chunk(s), ${r.status}.`, 'bot');
+        } catch (err) {
+          say('Approve failed: ' + err.message, 'bot');
+        }
+        openLibrary();
+      };
+      const no = el('button', 'danger', 'Reject');
+      no.onclick = async () => {
+        ok.disabled = no.disabled = true;
+        try {
+          await rest('/uploads/reject', {
+            method: 'POST',
+            body: JSON.stringify({ name: p.name }),
+          });
+          say(`Rejected ${p.name}.`, 'bot');
+        } catch (err) {
+          say('Reject failed: ' + err.message, 'bot');
+        }
+        openLibrary();
+      };
+      row.append(ok, no);
+      d.appendChild(row);
+    }
+
+    // --- indexed
+    d.appendChild(el('h2', null, `Indexed (${indexed.documents})`));
+    if (!indexed.docs.length) d.appendChild(el('p', 'hint', 'Nothing indexed yet.'));
+    for (const doc of indexed.docs) {
+      const row = el('div', 'row');
+      row.appendChild(el('span', 'grow mono', doc.doc_id));
+      row.appendChild(el('span', 'hint', `${doc.chunks} chunk${doc.chunks === 1 ? '' : 's'}`));
+      d.appendChild(row);
+    }
+  } catch (err) {
+    d.textContent = '';
+    d.appendChild(el('p', 'hint', 'Could not load: ' + err.message));
   }
 }
 

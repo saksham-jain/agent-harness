@@ -36,6 +36,7 @@ TOKENS_FILE = os.getenv("MCP_TOKENS_FILE", "tokens.json")
 # floor every request must clear, and mixing a write scope into it would force every
 # read-only token to carry write access.
 WRITE_SCOPE = os.getenv("MCP_WRITE_SCOPE", "docs:write")
+READ_SCOPE = os.getenv("MCP_READ_SCOPE", "docs:read")
 
 
 class StaticTokenVerifier(TokenVerifier):
