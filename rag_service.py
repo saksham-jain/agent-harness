@@ -155,60 +155,129 @@ def index(docs_dir=None):
         doc_id = os.path.relpath(path, os.path.abspath(docs_dir))
         seen.add(doc_id)
         try:
-            text = read_file(path)
+            result = _index_one(path, doc_id)
         except Exception as e:
             print(f"  skipped {path}: {e}")
             continue
-        h = hashlib.sha256(text.encode()).hexdigest()
-        exists = qdrant().collection_exists(COLLECTION)
-        old = _stored_hash(doc_id) if exists else None
-        if old == h:
-            skipped += 1
-            continue
-        chunks = chunk(text)
-        if not chunks:
-            continue
-        vecs = embed(llm, EMBED_MODEL, chunks, "search_document: ")
-        _ensure_collection(len(vecs[0]))
-
-        # Upsert before deleting. Point ids are uuid5(doc_id:index), so an upsert
-        # overwrites in place and the document is never momentarily unsearchable -- which
-        # is what happened when the delete came first and an upsert could fail.
-        # Only trailing chunks from a file that shrank need removing, and that is after.
-        qdrant().upsert(
-            COLLECTION,
-            points=[
-                models.PointStruct(
-                    id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_id}:{i}")),
-                    vector=v,
-                    payload={"doc_id": doc_id, "source": path, "hash": h, "chunk": i, "text": c},
-                )
-                for i, (c, v) in enumerate(zip(chunks, vecs))
-            ],
-        )
-        if exists:
-            qdrant().delete(
-                COLLECTION,
-                points_selector=models.FilterSelector(
-                    filter=models.Filter(
-                        must=[
-                            models.FieldCondition(key="doc_id", match=models.MatchValue(value=doc_id)),
-                            models.FieldCondition(key="chunk", range=models.Range(gte=len(chunks))),
-                        ]
-                    )
-                ),
-            )
-        if old is None:
-            new += 1
-        else:
-            updated += 1
-        print(f"  indexed {doc_id} ({len(chunks)} chunks)")
+        new += result["status"] == "new"
+        updated += result["status"] == "updated"
+        skipped += result["status"] in ("unchanged", "empty")
+        if result["status"] in ("new", "updated"):
+            print(f"  indexed {doc_id} ({result['chunks']} chunks)")
 
     pruned = _prune(seen) if qdrant().collection_exists(COLLECTION) else []
     report = f"Index ready: {new} new, {updated} updated, {skipped} unchanged files."
     if pruned:
         report += f" Pruned {len(pruned)} removed document(s): {', '.join(pruned)}."
     return report
+
+
+def index_file(path, docs_dir=None):
+    """Index exactly one document. Never prunes.
+
+    Separate from `index()` because uploads are single-document operations, and a
+    directory rescan per upload is the wrong shape for two reasons: it re-reads every
+    document to discover which changed, and `_prune()` is driven by `seen` -- which a
+    one-file run cannot fill. Calling `index()` on a file's directory is what makes two
+    directories evict each other; that is exactly the trap an upload endpoint walks into.
+
+    Not pruning is also the correct semantics here. `index()` treats the filesystem as the
+    source of truth and removes what is gone; this function has no view of the corpus, so
+    "what is gone" is not something it can answer. Deletion is `remove_document()`.
+
+    Returns {doc_id, chunks, status} where status is new | updated | unchanged | empty.
+    Raises ValueError for a path outside `docs_dir`, and whatever `read_file` raises for an
+    unreadable file — a corrupt PDF must look like a failure, not an empty document.
+    """
+    docs_dir = os.path.abspath(docs_dir or DOCS_DIR)
+    path = os.path.abspath(path)
+
+    # Identity is relative to docs_dir, so a path that escapes it has no valid doc_id and
+    # would create a second, unreferenced copy of the same corpus. Refuse rather than clamp.
+    if os.path.commonpath([docs_dir, path]) != docs_dir:
+        raise ValueError(f"Refusing to index {path!r}: outside the documents directory {docs_dir!r}.")
+
+    return _index_one(path, os.path.relpath(path, docs_dir))
+
+
+def remove_document(doc_id):
+    """Delete one document's points. Returns how many were removed.
+
+    The counterpart to `index_file()`, for the case where a file is still on disk but
+    should stop being searchable — or was uploaded and then withdrawn.
+    """
+    if not qdrant().collection_exists(COLLECTION):
+        return 0
+    qdrant().delete(
+        COLLECTION,
+        points_selector=models.FilterSelector(
+            filter=models.Filter(
+                must=[models.FieldCondition(key="doc_id", match=models.MatchValue(value=doc_id))]
+            )
+        ),
+    )
+    return len(_points_for(doc_id))
+
+
+def _index_one(path, doc_id):
+    """Embed one file if its text changed. Shared by `index()` and `index_file()`.
+
+    Kept as one function so the two entry points cannot drift: an upload path and a bulk
+    path that disagree about chunk ids or payload keys produce an index that is correct for
+    one and stale for the other.
+    """
+    text = read_file(path)
+    h = hashlib.sha256(text.encode()).hexdigest()
+    exists = qdrant().collection_exists(COLLECTION)
+    old = _stored_hash(doc_id) if exists else None
+    if old == h:
+        return {"doc_id": doc_id, "chunks": _chunk_count(doc_id), "status": "unchanged"}
+
+    chunks = chunk(text)
+    if not chunks:
+        return {"doc_id": doc_id, "chunks": 0, "status": "empty"}
+
+    vecs = embed(llm, EMBED_MODEL, chunks, "search_document: ")
+    _ensure_collection(len(vecs[0]))
+
+    # Upsert before deleting. Point ids are uuid5(doc_id:index), so an upsert
+    # overwrites in place and the document is never momentarily unsearchable -- which
+    # is what happened when the delete came first and an upsert could fail.
+    # Only trailing chunks from a file that shrank need removing, and that is after.
+    qdrant().upsert(
+        COLLECTION,
+        points=[
+            models.PointStruct(
+                id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_id}:{i}")),
+                vector=v,
+                payload={"doc_id": doc_id, "source": path, "hash": h, "chunk": i, "text": c},
+            )
+            for i, (c, v) in enumerate(zip(chunks, vecs))
+        ],
+    )
+    if exists:
+        qdrant().delete(
+            COLLECTION,
+            points_selector=models.FilterSelector(
+                filter=models.Filter(
+                    must=[
+                        models.FieldCondition(key="doc_id", match=models.MatchValue(value=doc_id)),
+                        models.FieldCondition(key="chunk", range=models.Range(gte=len(chunks))),
+                    ]
+                )
+            ),
+        )
+    return {"doc_id": doc_id, "chunks": len(chunks), "status": "updated" if old else "new"}
+
+
+def _points_for(doc_id):
+    points, _ = qdrant().scroll(COLLECTION, limit=1000, scroll_filter=_doc_filter(doc_id),
+                                with_payload=["chunk"])
+    return points
+
+
+def _chunk_count(doc_id):
+    return len(_points_for(doc_id))
 
 
 def retrieve(query, k=TOP_K):

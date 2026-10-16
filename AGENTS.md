@@ -155,6 +155,14 @@ exception surfaces as a bare `Error executing tool X` with the traceback in the 
 - **A browser cannot speak MCP.** The page has to do the `initialize` handshake itself and
   echo `mcp-session-id` on every later request, or the server answers `400 Missing session
   ID`. Replies arrive as SSE (`data: {...}` lines), so take the last complete frame.
+- **`index_file()` must never prune.** `_prune()` is driven by `seen`, which a one-file run
+  cannot fill, so calling `index()` on a file's directory is what makes two directories
+  evict each other. Single-document and bulk paths share `_index_one()` so their chunk ids
+  and payload keys cannot drift; `remove_document()` is the counterpart, because a function
+  with no view of the corpus cannot answer "what is gone".
+- **`index_file()` refuses a path outside `docs_dir`** with `ValueError`. `doc_id` is relative
+  to that directory, so an escaping path has no valid identity and would create a second,
+  unreferenced copy of the corpus.
 - **Indexing prunes deleted documents** and reports what it removed. One collection holds
   one corpus, so indexing a *different* directory than last time removes the previous
   directory's documents. That is intentional, not a bug.
