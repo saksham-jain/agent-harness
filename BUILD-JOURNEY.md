@@ -220,7 +220,7 @@ HTTP header, so stdio and the in-process `Client(mcp)` never see auth — a test
 | Real auth | Static table: no expiry, revocation needs a restart. Per-tool scopes now split read from write |
 | Injection via uploaded files | Not built. Whatever lands in `docs/` enters prompts unescaped, and the grounding prompt is the only guardrail |
 | Tool choice | The 7B still declines `answer_docs` on its own — the router's decision is now enforced rather than advisory, which works but is a patch over a prompt that misstates what the model knows |
-| Per-tool scopes | `refresh_index` is a mutation and every token holds `docs:read` |
+| Per-tool scopes | **done** — `docs:write` gates `refresh_index`. It was a live gap before any upload existed: a read-only token could rebuild the index |
 
 ### The exposure that outlived TLS
 
