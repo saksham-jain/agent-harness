@@ -283,10 +283,17 @@ gets the 5 that are safe to expose over a public URL.
 
 | Tool | Page | |
 |---|---|---|
-| `answer_docs`, `list_docs`, `index_status`, `whoami` | ✅ | read-only |
+| `answer_docs`, `index_status`, `whoami` | ✅ | read-only |
 | `refresh_index` | ⚠️ | behind a `confirm()`, the one mutation |
 | `bash`, `read_file`, `write_file`, `load_skill` | ❌ | not reachable, and deliberately so |
 | arithmetic | ✅ | computed in the browser, ~0.04 ms |
+
+The **Library** panel is not a tool — it is a view. It calls the REST routes directly
+(`/docs`, `/uploads`, `/upload`, `/uploads/approve`, `/uploads/reject`), shows everything
+indexed with chunk counts, and lists pending uploads with an **Approve** and a **Reject**
+button each. Approving is what indexes the document; the panel says so, because a document
+can contain text that tries to steer the model and the gate is the only control measured to
+hold. A read-only token sees the list and gets `403` on the buttons.
 
 The last row is not theatre. `10+1` sent to `answer_docs` costs **4.45s** and returns "no
 document matched"; computed locally it is instant and exact. Picking the right tool is a
