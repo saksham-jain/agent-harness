@@ -9,10 +9,14 @@ Verified on a fresh clone. Needs [Ollama](https://ollama.com) running with
 `ollama pull qwen2.5:7b && ollama pull nomic-embed-text`, and Docker.
 
 ```bash
-cp tokens.example.json tokens.json          # 1. a token table; keys are the tokens
-mkdir -p docs && cp docs.sample/test.md docs/   # 2. somewhere to keep documents
+cp tokens.example.json tokens.json              # 1. a token table; keys are the tokens
+mkdir -p docs && cp -R docs.sample/. docs/      # 2. somewhere to keep documents
 docker compose --profile index run --rm index    # 3. embed them
 ```
+
+Step 2 copies the **21-document sample corpus** (markdown, CSV, JSON, Python, text and
+PDF), so the agent has something real to answer from. Replace it with your own files, or
+point `DOCS_DIR` somewhere else.
 
 Everything binds to `127.0.0.1` — the MCP server, and Qdrant, which has no authentication and
 so must not be reachable from the network. Its dashboard is still at
@@ -50,7 +54,7 @@ so the files are the only copy.
 | Component | Detail |
 | --- | --- |
 | LLM | `qwen2.5:7b` (7.6B, Q4_K_M) via Ollama |
-| Router | `qwen2.5:1.5b` — decides whether a message needs the corpus |
+| Router | `qwen2.5:1.5b` — one binary call per message. Few-shot prompt, **0 false negatives** on the tuning set |
 | Embeddings | `nomic-embed-text` (137M, nomic-bert, 768-dim) |
 | Vector DB | Qdrant `1.19.1`, 768-dim Cosine, collection `rag_nomic_embed_text` |
 | Protocol | MCP Python SDK `2.2.0`, Streamable HTTP |
@@ -63,6 +67,7 @@ so the files are the only copy.
 | Auth libs | `mcp.server.auth.*`, `pydantic` `2.13.5`, `httpx2` `2.13.0` (client side) |
 | TLS | Real certificate, terminated by a **Tailscale Funnel** at `<machine>.<tailnet>.ts.net`. Origin is plain HTTP on loopback |
 | Host protection | `TransportSecuritySettings` — DNS-rebinding. **Off** unless `MCP_ALLOWED_HOSTS` is set |
+| Sample corpus | 21 documents, 6 formats, 35 chunks — `docs.sample/`, committed, and what the evals run against |
 
 ## Routing
 
@@ -85,10 +90,47 @@ The two error directions are not symmetric, which is the design:
 | False negative — needs docs, routed no | `answer_docs` is hidden, so the model cannot search. **Damaging** |
 | False positive — routed yes, did not need | one extra retrieval on a question that did not need it |
 
-So the router is deliberately permissive: on a labelled set of eight questions
-`qwen2.5:1.5b` scored 6/8 with **no false negatives**, and `qwen2.5:0.5b` scored 4/8 and
-routed arithmetic to the corpus, so it is not used. Set `ROUTER_MODEL=""` to disable
-routing entirely.
+So the router is deliberately permissive, and the prompt is written to match: it
+**demonstrates** the decision with six worked examples rather than describing it, and it
+**ends on "yes"** so the model's last impression is the cheap error.
+
+### The prompt has to show, not tell
+
+A prose prompt — *"answer yes for first person or possessive wording"* — scored **0.69**
+on the labelled set with **nine false negatives**. It answered "no" to *"what did the
+doctor prescribe?"* and to *"how many months notice do I have to leave the flat"*, because
+neither contains a pronoun, so it read them as general knowledge.
+
+| Router | Score | False negatives |
+| --- | --- | --- |
+| Prose prompt, `qwen2.5:1.5b` | 0.69 | 9 |
+| Prose prompt + a list of the indexed filenames | 0.44 | 18 |
+| Prose prompt, `qwen2.5:7b` | 0.38 | 20 |
+| One-line prompt, `qwen2.5:1.5b` | 0.19 | 26 |
+| **Few-shot, `qwen2.5:1.5b`** | **0.84** | **0** |
+
+A bigger model is not the fix — the 7B is *worse* at this than the 1.5B, for the same
+reason it declines `answer_docs`: it reasons about the question on its own terms rather
+than pattern-matching the demonstrated task. And listing the indexed filenames made it
+worse, not better: grounding helps a 7B, but 21 filenames in a preamble drown a 1.5B's
+attention.
+
+**The order of the examples is load-bearing.** Moving the "yes" examples to the front
+dropped the score to 0.53 with six false negatives; eight examples were worse than six.
+The last example sets the bias, so the prompt ends on "yes" — which is the right bias
+here, because a false positive only adds an option the model can ignore while a false
+negative means the documents can never be searched.
+
+**And there is no prose in it at all.** The shipped prompt is six worked examples and one
+neutral lead sentence. A clarifying lead — *"Answer no only for arithmetic, general
+knowledge, coding questions, or a named file"* — collapsed it from **0.84 to 0.16** with
+fifteen false negatives, because "Answer no only for…" primes the model to answer no and
+overrides every demonstration after it. *"If you are unsure, answer yes"* cost 0.10 in
+either position. A 1.5B pattern-matches; it does not read a rule and apply it to the
+examples, so any instruction competes with the pattern.
+
+The examples are deliberately generic and appear in **no eval case**, so the tuning set
+stays a clean measure of the prompt. Set `ROUTER_MODEL=""` to disable routing entirely.
 
 ### A correct router is not enough — the router's decision is enforced
 
@@ -429,13 +471,19 @@ misroutes tools. Two skills ship: `commit` and `stack-status`.
 ## Evals
 
 ```bash
-../.venv/bin/python3 evals/run.py --fast    # retrieval + routing, seconds
-../.venv/bin/python3 evals/run.py --full    # also grades answers, one generation per case
+../.venv/bin/python3 evals/run.py --fast              # retrieval + routing, seconds
+../.venv/bin/python3 evals/run.py --fast --no-model    # skip the 7B column: ~20s
+../.venv/bin/python3 evals/run.py --full               # also grades answers, one generation per case
 ```
 
 Split by cost on purpose. Retrieval and routing need no generation, run in seconds, and
 are where the failures have actually been — so they can gate every change. Answer grading
 costs a generation per case and is only worth running when the answer path changes.
+
+**`--no-model` exists because the `model would call` column costs one 7B generation per
+case** — it was most of a ten-minute run, and the 7B competes for memory with the MCP
+server on the same machine. That column is the one that caught the model ignoring the
+router, so it is worth keeping; it is just not worth paying for on every run.
 
 Prose quality is deliberately **not** graded: that needs a judge model, and with a 7B
 judge that mostly measures the judge. Structure is graded instead — did it abstain, do
@@ -444,6 +492,32 @@ the citations resolve.
 `cases.json` holds two sets. `cases` is a **tuning set**: the router prompt was last
 changed against it, so its score is optimistic. `holdout` was written afterwards and is
 never tuned against — that is the number to trust, and it is what the exit code gates on.
+
+The holdout has been **rewritten twice**, and both times for the same reason. The first
+one revealed that the router was answering "no" to nine document questions; the second
+was retired because the eval run that exposed a broken router prompt also showed its
+score, so it could no longer be an untouched set. The current one has never been run
+against a tuned system. It also includes two *near-miss* negatives: a relevant document
+exists, so the router must still route, but the answer is not in it and the model must
+abstain. Those catch a confident hallucination, which a plain negative cannot.
+
+Measured on the current holdout (24 cases, never tuned against):
+
+```
+retrieval recall@4   0.83   (18 cases)
+routing accuracy     0.83   (24 cases)   0 false negatives, 4 false positives
+```
+
+The four routing errors are all the cheap direction — general knowledge ("how many legs
+does a spider have?") was routed to the corpus. The three recall errors are all the same
+ranking failure: the correct document is in the corpus and scores just below the cut
+(ranks 6, 12 and 6, within 0.03–0.09 of the winner). That is the hybrid-search problem,
+not a broken pipeline.
+
+The corpus is **21 documents across six formats** — markdown, CSV, JSON, Python, plain
+text and PDF — committed as `docs.sample/`. That matters more than the case count: an
+earlier `recall@4 = 0.00` was a scoring artefact of a one-document corpus, and the score
+overlap that ruled out `MIN_SCORE` was measured on a 65-byte file.
 
 `routing accuracy` and `model would call` are reported separately on purpose. Routing alone
 is not enough: it read **1.00** while the agent was completely broken, because the router was
@@ -480,11 +554,13 @@ WARNING mcp.tools: refresh_index() failed after 120ms: No supported files found 
   file fills all four with adjacent near-duplicate passages. Chunks also follow document
   structure rather than a fixed 800-character width, so a chunk is a readable passage instead
   of half a sentence.
-- **`MIN_SCORE` is a weak signal.** Relevant and irrelevant top-1 scores overlap on this
-  corpus (0.59 relevant vs 0.60–0.62 irrelevant), so no threshold separates them. The
-  grounding prompt inside `answer_docs` is the actual guardrail. This is why the server
-  returns a finished answer rather than raw chunks — handing chunks back would move the
-  grounding rules into a 7B model's judgement, where they get lost.
+- **`MIN_SCORE` is a weak signal, and no threshold can fix it.** On the 21-document corpus
+  the correct document scores **0.491 at rank 4** while the wrong one scores **0.517** — the
+  whole top-12 sits inside **0.06**. Any floor that admits rank 1 also admits rank 4, so
+  there is no separating value; the grounding prompt inside `answer_docs` is the actual
+  guardrail. This is why the server returns a finished answer rather than raw chunks —
+  handing chunks back would move the grounding rules into a 7B model's judgement, where
+  they get lost. The fix is hybrid search, not a better constant.
 - **Rebuild after changing the Dockerfile.** Compose keeps a per-service image, so a stale
   one can carry an old `ENTRYPOINT` that swallows your `command:` override.
 

@@ -57,10 +57,19 @@ def retrieve_sources(query, k=4):
     points = rag_service.qdrant().query_points(
         rag_service.COLLECTION, query=emb.data[0].embedding, limit=k, with_payload=True
     ).points
-    return [(basename(p.payload.get("file", "")), p.score) for p in points]
+    # doc_id is the document's identity (path relative to the corpus root); source is
+    # the absolute path it was indexed from. The old payload key was "file", removed
+    # when doc_id landed -- reading it here returned "" for every point, so this
+    # function reported no sources at all and recall@4 scored 0.00 on every case
+    # while looking like a real measurement.
+    out = []
+    for p in points:
+        ident = p.payload.get("doc_id") or p.payload.get("source") or ""
+        out.append((basename(ident), p.score))
+    return out
 
 
-def check_fast(cases, verbose=False):
+def check_fast(cases, verbose=False, measure_model=True):
     """Retrieval recall and routing accuracy. No generation."""
     rows = []
     for case in cases:
@@ -88,7 +97,7 @@ def check_fast(cases, verbose=False):
             # Scoring routing alone cannot catch the failure this column exists for: the
             # router was right every time while qwen2.5:7b answered "no tool" anyway, so
             # routing accuracy read 1.00 on a completely broken path.
-            row["model_ok"] = _model_would_call(case["query"], decision)
+            row["model_ok"] = _model_would_call(case["query"], decision) if measure_model else None
         else:
             row["routing_ok"] = None
             row["model_ok"] = None
@@ -220,6 +229,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fast", action="store_true", help="retrieval + routing only")
     ap.add_argument("--full", action="store_true", help="also grade generated answers")
+    ap.add_argument("--no-model", action="store_true",
+                    help="skip the 'model would call' column (one 7B generation per case)")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
     if not (args.fast or args.full):
@@ -232,7 +243,11 @@ def main():
               f"{rag_service.QDRANT_URL}. Run the indexer first.")
         return 2
 
-    rows = check_fast(cases, args.verbose)
+    # The "model would call" column costs one 7B generation per case, which is most of
+    # the runtime and competes for memory with the MCP server on the same machine. It
+    # is the column that caught the model ignoring the router, so it is worth keeping -
+    # but not on every run, and not when iterating on the router.
+    rows = check_fast(cases, args.verbose, measure_model=not args.no_model)
     fast = report("fast  tuning set", rows,
                   ["retrieval_ok", "routing_ok", "model_ok"],
                   ["retrieval recall@4", "routing accuracy", "model would call"])
@@ -243,7 +258,7 @@ def main():
     hold = None
     if holdout:
         print(f"\n  {len(holdout)} held-out cases (never tuned against)")
-        hrows = check_fast(holdout, args.verbose)
+        hrows = check_fast(holdout, args.verbose, measure_model=not args.no_model)
         hold = report("fast  HOLDOUT", hrows,
                       ["retrieval_ok", "routing_ok", "model_ok"],
                       ["retrieval recall@4", "routing accuracy", "model would call"])

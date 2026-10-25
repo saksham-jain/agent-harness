@@ -1,0 +1,13 @@
+{
+  "building": "14B Mercer Street",
+  "flats": [
+    { "number": "12A", "floor": 0, "tenancy": { "type": "long", "monthly": 1150 } },
+    { "number": "14A", "floor": 1, "tenancy": { "type": "long", "monthly": 1450,
+        "tenant": "Kiran Jain", "lease_start": "2025-07-01", "lease_end": "2026-05-31" } },
+    { "number": "14B", "floor": 1, "tenancy": { "type": "short", "monthly": 1680 } },
+    { "number": "14C", "floor": 2, "tenancy": { "type": "long", "monthly": 1520,
+        "note": "spare key held here" } }
+  ],
+  "notice_period_days": 60,
+  "deposit_months": 1
+}

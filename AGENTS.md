@@ -142,6 +142,32 @@ exception surfaces as a bare `Error executing tool X` with the traceback in the 
   question as unanswerable and said so, while the corpus contained the answer. Stating that
   the documents exist took it to **3/3**. `run_turn` now forces the call when the router said
   `documents`, which is the only place the model has no veto.
+- **The router prompt's example order is load-bearing.** `ROUTER_PROMPT` is few-shot
+  because a prose prompt scored 0.69 with **nine** false negatives — it answered "no" to
+  "what did the doctor prescribe?", because no pronoun meant "general knowledge" to a
+  1.5B. Demonstrating the decision fixed it, and the *last* example sets the bias: moving
+  the "yes" examples to the front drops the score to 0.53 with six false negatives. End on
+  "yes" — a false positive only adds an option, a false negative hides `answer_docs`
+  entirely. Adding the indexed filenames to the prompt also makes it **worse** (0.44):
+  grounding helps a 7B, 21 filenames do not fit in a 1.5B's attention.
+- **Add no prose to `ROUTER_PROMPT` at all.** It is six worked examples and one neutral
+  lead sentence, and nothing else. A clarifying lead — *"Answer no only for arithmetic,
+  general knowledge, coding questions, or a named file"* — collapsed it from **0.84 to
+  0.16** with fifteen false negatives, because "Answer no only for…" primes the model to
+  answer no and overrides every demonstration after it. *"If you are unsure, answer yes"*
+  cost 0.10 in either position. A 1.5B pattern-matches; it does not read a rule and apply
+  it to the examples, so any instruction competes with the pattern. Measure any change to
+  this string against the tuning set.
+- **A renamed payload key is not finished when the writer updates it.** `payload["file"]`
+  became `payload["doc_id"]`, and the eval runner kept reading the old name. It matched no
+  source, so `recall@4` read **0.00** on every case — a number that looked like a retrieval
+  result and was a broken matcher. Grep for the old key, not just the new one.
+- **An eval needs a corpus worth measuring.** `recall@4 = 0.00` was an artefact of one
+  65-byte file. `docs.sample/` now holds **21 documents across six formats** and 35
+  chunks, and every `sources` entry in `cases.json` names a file that exists. `cases` is
+  the tuning set; `holdout` was rewritten on 19 and 20 October 2026 and must not be
+  tuned against. A holdout you have looked at has to be retired — it cannot report an
+  honest number any more.
 - **`docker-compose.yml` hardcodes beat `.env`.** A literal `MCP_SERVER_URL=...` in the
   compose file cannot be overridden from `.env`; only `${VAR:-default}` can. And compose does
   **not** run shell substitution in `.env`, so `$(python3 ...)` reaches the container as that

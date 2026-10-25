@@ -35,25 +35,52 @@ ROUTER_MODEL = os.getenv("ROUTER_MODEL", "qwen2.5:1.5b")
 ROUTER_KEEP_ALIVE = os.getenv("ROUTER_KEEP_ALIVE", "30m")
 DOCS_TOOL_NAME = "answer_docs"
 
-ROUTER_PROMPT = """Does answering this message need the user's own documents - their \
-notes, records, resumes, contracts, travel plans, saved plans, anything they wrote \
-or saved about themselves?
+# Few-shot, and nothing but the examples. Both details below are load-bearing, and both
+# were measured rather than reasoned about.
+#
+# A prose prompt ("answer yes for first person or possessive wording") scored 0.69 on
+# the labelled set with NINE false negatives - it answered "no" to "what did the doctor
+# prescribe?" and to "how many months notice do I have to leave the flat", because
+# neither contains a pronoun, so it read them as general knowledge. A corpus manifest
+# made it worse still (0.44): 21 filenames in the preamble drown a 1.5B's attention.
+#
+# The fix is to demonstrate the decision rather than describe it. Two things about that:
+#
+# 1. THE ORDER. The last example sets the bias. Moving the "yes" examples to the front
+#    dropped accuracy to 0.53 with 6 false negatives; eight examples were worse than six.
+#    So the prompt ends on "yes" - the cheap error, because a false yes only adds an
+#    option the model can ignore while a false no means the documents can never be
+#    searched.
+#
+# 2. NO PROSE AT ALL. Adding a clarifying sentence to the lead - "Answer no only for
+#    arithmetic, general knowledge, coding questions, or a named file" - collapsed the
+#    score from 0.84 to 0.16 with 15 false negatives, because "Answer no only for..."
+#    primes the model to answer no and overrides every demonstration after it. Adding
+#    "If you are unsure, answer yes" in either position cost 0.10. A 1.5B does not
+#    read a rule and then apply it to the examples; it pattern-matches, and any
+#    instruction in the prompt competes with the pattern. Keep this string pure.
+#
+# The examples are deliberately generic and appear in no eval case, so the tuning set
+# stays a clean measure of the prompt and the holdout stays honest.
+ROUTER_PROMPT = """Decide if the message needs the user's own documents.
 
-Answer no ONLY for these, which need no document:
-- arithmetic and pure computation
-- general knowledge and factual questions about the world
-- coding questions
-- a named file in the working directory, like "what is in config.json"
+Message: which planet is closest to the sun?
+no
 
-Answer yes for everything else, including:
-- first person or possessive: "we", "I", "my", "our"
-- their own plans, records, decisions or history
-- anything referring to a specific trip, person, job, contract or document
+Message: 48 * 6
+no
 
-If you are unsure, answer yes. A false yes only adds an option the model can ignore; \
-a false no means the documents can never be searched.
+Message: what is in config.json?
+no
 
-Reply with exactly one word, yes or no.
+Message: what did the doctor say at my last appointment?
+yes
+
+Message: what did we agree on at the last meeting?
+yes
+
+Message: how much is my rent each month?
+yes
 
 Message: """
 
