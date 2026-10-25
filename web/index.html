@@ -424,10 +424,10 @@ $('bar').onsubmit = async (e) => {
       const s = document.createElement('div');
       s.className = 'src';
       const srcText = text.slice(cut + 2)
-        .replace(/\s*\[model:[^\]]*\]\s*$/, '')
-        .replace(/\s*\[cached:[^\]]*\]\s*$/, '')
-        .replace(/\s*\[token usage:[^\]]*\]\s*$/, '')
-        .replace(/\s*\[response time:[^\]]*\]\s*$/, '');
+        .replace(/\s*\[model:[^\]]*\]/g, '')
+        .replace(/\s*\[cached:[^\]]*\]/g, '')
+        .replace(/\s*\[token usage:[^\]]*\]/g, '')
+        .replace(/\s*\[response time:[^\]]*\]/g, '');
       s.textContent = srcText.replace(/\s*\n\s*/g, ' ');
       pending.appendChild(s);
     }
