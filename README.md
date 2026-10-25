@@ -232,7 +232,7 @@ TLS is served by `mcp-server` itself — see **Auth and TLS** below.
 | Auth | `auth.py` | `TokenVerifier` + scope check, between the server and the network |
 | RAG Service | `rag_service.py` | Embedding and retrieval over Qdrant |
 | Corpus | `corpus.py` | File discovery, chunking, batched embedding |
-| Ollama *(host)* | — | Chat, routing decisions, embeddings. **The GPU lives here** |
+| Ollama *(host)* | — | Chat, routing decisions, embeddings. **The GPU lives here** — and **is the inference engine** |
 | Skills | `skills.py` + `skills/*/SKILL.md` | Playbooks the agent can load on demand |
 | Indexer | `index_docs.py` | Thin CLI over the RAG service |
 | Evals | `evals/` | Labelled cases and the scoring runner |
@@ -242,6 +242,39 @@ and the harness is usable by any MCP client. Ollama sits outside the chain — t
 call it over HTTP, which is why the "Agent + LLM" box holds the loop, not the model.
 
 **Ollama is not a compose service** — see **Where the GPU is used** below.
+
+### Where inference happens
+
+Ollama is the **inference engine**, not just a model host. The token loop —
+logits → sample → append → repeat → stop — runs inside Ollama (through llama.cpp on the
+GGUF weights). The harness builds the prompt and calls it; the loop itself is Ollama's.
+
+```
+AI Harness (agent_harness_base.py)
+   │  builds prompt: system + retrieved context + question
+   ▼
+Ollama — HOST, the inference engine
+   │  serves the token loop: logits → sample → append → repeat → stop
+   ▼
+answer → MCP progress notifications → answer_docs
+```
+
+Verified live: Ollama serving on `:11434`, `qwen2.5:7b` context length **32768**, and token
+counters (`prompt_eval_count`, `eval_count`) present in real generation responses.
+
+### Other inference options
+
+Ollama is the current choice, not the only one. The layer boundary is what matters — any
+OpenAI-compatible endpoint can back the harness unchanged.
+
+| Option | What it is | Status |
+| --- | --- | --- |
+| **Ollama** *(current)* | Local runtime; llama.cpp on GGUF; GPU on host | ✅ in use, verified |
+| **llama.cpp** | The engine underneath Ollama — self-hosted directly | not chosen; same engine |
+| vLLM / LocalAI / LM Studio / text-generation-webui | Other self-hosted OpenAI-compatible servers | not chosen (planned) |
+| Hosted open models (Groq free tier, Hugging Face free inference, OpenRouter…) | Remote inference, free tiers where they exist | not chosen — local-first |
+
+The swap is a `base_url` change, not a rewrite.
 
 ## Auth and TLS
 
