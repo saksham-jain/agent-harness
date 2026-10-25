@@ -30,6 +30,7 @@ QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 CHAT_MODEL = os.getenv("LLM_MODEL", "qwen2.5:7b")
 # Optional cheaper/faster model used for short, simple queries. Empty disables it.
 FAST_MODEL = os.getenv("FAST_MODEL", "")
+FAST_MODEL_MIN_CHARS = int(os.getenv("FAST_MODEL_MIN_CHARS", "8"))
 FAST_MODEL_THRESHOLD = int(os.getenv("FAST_MODEL_THRESHOLD", "80"))
 EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
 DOCS_DIR = os.getenv("DOCS_DIR", "/docs")
@@ -699,7 +700,7 @@ def build_context(hits, max_chars=MAX_CONTEXT_CHARS):
 def _select_model(query):
     """Pick the generation model. A fast (smaller) model is used for short queries when
     FAST_MODEL is configured; longer queries keep the full model for quality."""
-    if FAST_MODEL and len(query) <= FAST_MODEL_THRESHOLD:
+    if FAST_MODEL and FAST_MODEL_MIN_CHARS <= len(query) <= FAST_MODEL_THRESHOLD:
         return FAST_MODEL
     return CHAT_MODEL
 
