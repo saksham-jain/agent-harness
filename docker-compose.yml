@@ -27,6 +27,7 @@ services:
       - LLM_BASE_URL=http://host.docker.internal:11434/v1   # native Ollama on your Mac
       - LLM_MODEL=qwen2.5:7b
       - FAST_MODEL=${FAST_MODEL:-qwen2.5:1.5b}
+      - FAST_MODEL_MIN_CHARS=${FAST_MODEL_MIN_CHARS:-8}
       - FAST_MODEL_THRESHOLD=${FAST_MODEL_THRESHOLD:-80}
       - QDRANT_URL=http://qdrant:6333
       - EMBED_MODEL=nomic-embed-text
