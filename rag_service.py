@@ -564,7 +564,10 @@ _FENCE_LITERALS = (
     "<<<END QUESTION>>>",
     "<<<UNTRUSTED_DOCUMENT>>>",
 )
-_FENCE_PASSAGE_RE = re.compile(r"-{2,}\s*(BEGIN|END)\s+PASSAGE\s*\d*\s*-{2,}", re.I)
+# Passage markers are stripped with or without their surrounding dashes: a document that
+# drops the dashes is not the same delimiter, but stripping it too keeps the model from
+# seeing anything that looks like a fence boundary.
+_FENCE_PASSAGE_RE = re.compile(r"-*\s*(BEGIN|END)\s+PASSAGE\s*\d*\s*-*", re.I)
 
 
 def _fence(text):
@@ -577,7 +580,10 @@ def _fence(text):
     another, so the fence leaked on the first try.
     """
     text = _FENCE_PASSAGE_RE.sub("", text)
-    for marker in _FENCE_LITERALS:
+    # Case-insensitive: a document that varies the casing must not survive as a marker.
+    text = re.sub(r"BEGIN\s+CONTEXT", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"END\s+CONTEXT", "", text, flags=re.IGNORECASE)
+    for marker in ("<<<QUESTION>>>", "<<<END QUESTION>>>", "<<<UNTRUSTED_DOCUMENT>>>"):
         text = text.replace(marker, "")
     return text
 
