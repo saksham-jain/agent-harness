@@ -6,3 +6,5 @@ pypdf
 mcp[cli]>=2.2,<3
 # Optional: tracing for the agent loop. Only used when LANGCHAIN_TRACING_V2 is set.
 langsmith>=0.1
+# Optional: Prometheus metrics. /metrics endpoint is only registered when installed.
+prometheus_client>=0.20

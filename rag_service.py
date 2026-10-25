@@ -376,6 +376,40 @@ def _chunk_count(doc_id):
     return len(_points_for(doc_id))
 
 
+# Optional Prometheus metrics. No-ops when prometheus_client is not installed.
+try:
+    from prometheus_client import Counter, Histogram
+
+    _PROM_AVAILABLE = True
+except Exception:
+    _PROM_AVAILABLE = False
+
+    class _NoopMetric:
+        def labels(self, *args, **kwargs):
+            return self
+
+        def observe(self, *args, **kwargs):
+            pass
+
+        def inc(self, *args, **kwargs):
+            pass
+
+    Counter = Histogram = lambda *a, **k: _NoopMetric()
+
+RAG_RETRIEVE_SECONDS = Histogram(
+    "rag_retrieve_seconds", "Retrieval latency in seconds",
+    buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0),
+)
+RAG_GENERATE_SECONDS = Histogram(
+    "rag_generate_seconds", "Generation latency in seconds",
+    ["model"], buckets=(0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 40.0, 60.0),
+)
+RAG_TOKENS_TOTAL = Counter(
+    "rag_tokens_total", "Tokens consumed by generation", ["model", "type"],
+)
+RAG_CACHE_HITS = Counter("rag_cache_hits_total", "Answer cache hits")
+
+
 def retrieve(query, k=None):
     if k is None:
         k = RETRIEVE_K
@@ -391,6 +425,7 @@ def retrieve(query, k=None):
     consecutive chunks of the same text score near-identically and would otherwise consume
     the per-document allowance on their own.
     """
+    started = time.perf_counter()
     emb = llm.embeddings.create(model=EMBED_MODEL, input=[SEARCH_PREFIX + query])
     # Ask for more than we need: the surplus is what makes room for other documents.
     fetch = max(k * 4, TOP_N) if k > TOP_K else max(k, TOP_N)
@@ -415,6 +450,7 @@ def retrieve(query, k=None):
         kept.append(p)
         if len(kept) == k:
             break
+    RAG_RETRIEVE_SECONDS.observe(time.perf_counter() - started)
     return kept
 
 
@@ -687,6 +723,7 @@ def answer_from(query, hits, on_token=None, stats=None):
     cached = _cache_get(query)
     if cached is not None:
         cached_text, cached_stats = cached
+        RAG_CACHE_HITS.inc()
         if stats is not None:
             stats.clear()
             stats.update(cached_stats)
@@ -707,6 +744,7 @@ def answer_from(query, hits, on_token=None, stats=None):
     # return, so the callback path is a timing change and not a different model output.
     # `stream=True` with no callback would be pointless, so only ask for it when someone
     # is listening.
+    gen_started = time.perf_counter()
     if on_token is None:
         resp = llm.chat.completions.create(
             model=model, messages=messages,
@@ -735,6 +773,15 @@ def answer_from(query, hits, on_token=None, stats=None):
                     on_token(piece)
             _capture_token_stats(chunk, stats)
         text = "".join(parts)
+
+    RAG_GENERATE_SECONDS.labels(model=model).observe(time.perf_counter() - gen_started)
+    if stats is not None:
+        pt = stats.get("prompt_tokens")
+        ct = stats.get("completion_tokens")
+        if pt is not None:
+            RAG_TOKENS_TOTAL.labels(model=model, type="prompt").inc(pt)
+        if ct is not None:
+            RAG_TOKENS_TOTAL.labels(model=model, type="completion").inc(ct)
 
     sources = "\n".join(f"  [{i + 1}] {_label(h)} (score {h.score:.2f})" for i, h in enumerate(hits))
     result = f"{text}\n\nSources:\n{sources}"

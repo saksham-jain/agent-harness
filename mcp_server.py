@@ -334,7 +334,20 @@ def _web_routes():
 
 if __name__ == "__main__":
     # Registered before the app is built; the SDK forwards this list into the app's routes.
-    mcp._custom_starlette_routes = _web_routes()
+    _routes = list(_web_routes())
+    # Free Prometheus metrics endpoint, when prometheus_client is installed.
+    try:
+        from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+        from starlette.responses import Response
+        from starlette.routing import Route
+
+        async def _metrics(_request):
+            return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+        _routes = _routes + [Route("/metrics", endpoint=_metrics)]
+    except Exception:
+        pass
+    mcp._custom_starlette_routes = _routes
 
     transport_security = TransportSecuritySettings(
         # Enabling the check with an empty allow list would lock out every request,
