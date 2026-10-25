@@ -494,7 +494,7 @@ through `.env` / compose env without code changes.
 
 | Mechanism | Env / default | Effect |
 | --- | --- | --- |
-| Fast-model fallback | `FAST_MODEL=qwen2.5:1.5b`, `FAST_MODEL_THRESHOLD=80` | Short queries (≤ 80 chars) use the 1.5B model (~4× faster); longer ones keep 7B. Chosen model is appended as `[model: …]` |
+| Fast-model fallback | `FAST_MODEL=qwen2.5:1.5b`, `FAST_MODEL_MIN_CHARS=8`, `FAST_MODEL_THRESHOLD=80` | Queries between 8 and 80 chars use the 1.5B model (~4× faster); shorter or longer ones keep 7B. Chosen model is appended as `[model: …]` |
 | Answer cache | `ANSWER_CACHE_TTL=300`, `ANSWER_CACHE_SIZE=64` (0 disables), `ANSWER_CACHE_FILE` | Identical queries skip retrieval + generation entirely; token stats restored from cache. Set `ANSWER_CACHE_FILE` (e.g. `/cache/answers.json`) to persist across restarts |
 | Output cap | `CHAT_MAX_TOKENS=512` | Stops runaway generation |
 | Context trim | `RETRIEVE_K=4`, `MAX_CONTEXT_CHARS=12000` | Fewer/shorter passages → faster prefill |
