@@ -13,6 +13,7 @@ Env:
   MIN_SCORE      relevance floor; see README for why it is only a weak signal
 """
 import hashlib
+import json
 import os
 import re
 import threading
@@ -46,8 +47,47 @@ RETRIEVE_K = int(os.getenv("RETRIEVE_K", str(TOP_K)))
 # In-memory answer cache. Identical queries skip generation entirely.
 ANSWER_CACHE_TTL = int(os.getenv("ANSWER_CACHE_TTL", "300"))
 ANSWER_CACHE_SIZE = int(os.getenv("ANSWER_CACHE_SIZE", "64"))
+# Optional file to persist the cache across restarts. Empty disables persistence.
+ANSWER_CACHE_FILE = os.getenv("ANSWER_CACHE_FILE", "")
 _answer_cache = {}
 _answer_cache_lock = threading.Lock()
+
+
+def _load_cache_from_disk():
+    if not ANSWER_CACHE_FILE or not os.path.isfile(ANSWER_CACHE_FILE):
+        return
+    try:
+        with open(ANSWER_CACHE_FILE) as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return
+        now = time.time()
+        with _answer_cache_lock:
+            for key, entry in data.items():
+                if not isinstance(entry, dict):
+                    continue
+                ts = entry.get("ts", 0)
+                if ANSWER_CACHE_TTL > 0 and now - ts > ANSWER_CACHE_TTL:
+                    continue
+                _answer_cache[key] = (entry.get("text", ""), entry.get("stats", {}), ts)
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+
+
+def _persist_cache():
+    if not ANSWER_CACHE_FILE:
+        return
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(ANSWER_CACHE_FILE)), exist_ok=True)
+        with _answer_cache_lock:
+            data = {
+                key: {"text": v[0], "stats": v[1], "ts": v[2]}
+                for key, v in _answer_cache.items()
+            }
+        with open(ANSWER_CACHE_FILE, "w") as f:
+            json.dump(data, f)
+    except OSError:
+        pass
 
 
 def _cache_get(query):
@@ -77,6 +117,10 @@ def _cache_set(query, text, stats):
         while len(_answer_cache) > ANSWER_CACHE_SIZE:
             oldest = next(iter(_answer_cache))
             _answer_cache.pop(oldest, None)
+    _persist_cache()
+
+# Restore persisted cache entries on import.
+_load_cache_from_disk()
 
 # Upload limits. Applied before anything is written, not after.
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))

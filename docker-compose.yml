@@ -37,6 +37,7 @@ services:
       - MAX_CONTEXT_CHARS=${MAX_CONTEXT_CHARS:-12000}
       - ANSWER_CACHE_TTL=${ANSWER_CACHE_TTL:-300}
       - ANSWER_CACHE_SIZE=${ANSWER_CACHE_SIZE:-64}
+      - ANSWER_CACHE_FILE=/cache/answers.json
       - LLM_KEEP_ALIVE=${LLM_KEEP_ALIVE:-30m}
       # Auth is off by default so local development needs no setup. Turn it on when
       # anything other than you can reach this container.
@@ -71,6 +72,8 @@ services:
       - ./tokens.json:/run/tokens.json:ro
       # Read-only, and gitignored: contains a private key.
       - ./.certs:/certs:ro
+      # Writable cache for persisted answer cache. Survives container recreates.
+      - ./cache:/cache
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
