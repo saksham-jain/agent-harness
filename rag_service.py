@@ -32,6 +32,11 @@ MIN_SCORE = float(os.getenv("MIN_SCORE", "0.5"))
 # Ceiling on the text handed to the model. Retrieval already caps documents per query; this
 # caps total characters, because one very long passage can still crowd out the question.
 MAX_CONTEXT_CHARS = int(os.getenv("MAX_CONTEXT_CHARS", "12000"))
+# Cap on generated tokens. Most answers are short; an uncapped call can run long.
+CHAT_MAX_TOKENS = int(os.getenv("CHAT_MAX_TOKENS", "512"))
+# How many chunks reach the model. TOP_K is the frozen corpus default; this lets the
+# caller tune it without editing corpus.py.
+RETRIEVE_K = int(os.getenv("RETRIEVE_K", str(TOP_K)))
 
 # Upload limits. Applied before anything is written, not after.
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
@@ -287,7 +292,9 @@ def _chunk_count(doc_id):
     return len(_points_for(doc_id))
 
 
-def retrieve(query, k=TOP_K):
+def retrieve(query, k=None):
+    if k is None:
+        k = RETRIEVE_K
     """Embed the query, then spread the result slots across documents.
 
     The dedup is the point. `k` is the number of chunks the model sees, and four slots is
@@ -590,7 +597,11 @@ def answer_from(query, hits, on_token=None, stats=None):
     # `stream=True` with no callback would be pointless, so only ask for it when someone
     # is listening.
     if on_token is None:
-        resp = llm.chat.completions.create(model=CHAT_MODEL, messages=messages)
+        resp = llm.chat.completions.create(
+            model=CHAT_MODEL, messages=messages,
+            max_tokens=CHAT_MAX_TOKENS,
+            extra_body={"keep_alive": os.getenv("LLM_KEEP_ALIVE", "30m")},
+        )
         text = resp.choices[0].message.content
         _capture_token_stats(resp, stats)
     else:
@@ -600,7 +611,9 @@ def answer_from(query, hits, on_token=None, stats=None):
         # the MCP tool never appends the "[token usage: ...]" line the UI reads.
         for chunk in llm.chat.completions.create(
             model=CHAT_MODEL, messages=messages, stream=True,
+            max_tokens=CHAT_MAX_TOKENS,
             stream_options={"include_usage": True},
+            extra_body={"keep_alive": os.getenv("LLM_KEEP_ALIVE", "30m")},
         ):
             # The final chunk that carries `usage` has an empty choices list, so
             # guard before reading the delta.
