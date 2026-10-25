@@ -72,6 +72,13 @@ exception surfaces as a bare `Error executing tool X` with the traceback in the 
 - **Rebuild after changing the Dockerfile.** Compose keeps a *separate image per service*,
   so a stale one can carry an old `ENTRYPOINT` that silently swallows a `command:`
   override. This caused a service to run with the wrong argv.
+- **Rebuild means recreate, not restart.** `docker compose build <svc>` writes a new image;
+  `docker compose restart <svc>` only restarts the container that already holds the old image.
+  After a rebuild of a service whose code is baked in (`mcp-server`, `mcp-client`, `index`),
+  you need `docker compose up -d --force-recreate <svc>` (or `rm` + `up -d`) — a bare restart
+  kept serving the pre-change module, which I hit while adding token capture to
+  `rag_service`/`mcp_server`. Bind-mounted files only need a restart; baked-in files need a
+  rebuild plus a recreate.
 - **Qdrant has no authentication here.** It is bound to `127.0.0.1` so only this machine can
   reach it, and the services reach it over the compose network by service name (`qdrant:6333`),
   so that binding costs them nothing. Before it was `0.0.0.0:6333`, where `DELETE

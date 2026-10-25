@@ -327,7 +327,22 @@ def retrieve(query, k=TOP_K):
     return kept
 
 
-def answer(query, on_token=None):
+def _capture_token_stats(resp, stats):
+    """Read the token usage Ollama reported back and hand it to the caller.
+
+    Ollama's OpenAI-compatible endpoint surfaces its native counts as `usage`
+    (prompt_tokens / completion_tokens). Until now the harness ignored that object,
+    so token measurement had to happen by hand-calling Ollama instead of inside the
+    generation path itself.
+    """
+    usage = getattr(resp, "usage", None)
+    if stats is None or usage is None:
+        return
+    stats["prompt_tokens"] = usage.prompt_tokens
+    stats["completion_tokens"] = usage.completion_tokens
+
+
+def answer(query, on_token=None, stats=None):
     """Ground an answer in the corpus, or admit nothing was found.
 
     Generation stays in here on purpose: a caller that receives raw chunks has to
@@ -337,6 +352,9 @@ def answer(query, on_token=None):
     way a caller can show progress, because generation is a CPU-bound 7B call that takes
     tens of seconds on a laptop. Streaming is opt-in: with no callback the fragments are
     joined and the same string is returned as before.
+
+    `stats` is an optional dict the token usage is written into, so callers measuring
+    generation can read it without scraping the answer text.
     """
     if not available():
         return (
@@ -351,7 +369,7 @@ def answer(query, on_token=None):
     if not hits:
         return abstention(query)
 
-    return answer_from(query, hits, on_token)
+    return answer_from(query, hits, on_token, stats)
 
 
 def abstention(query):
@@ -545,7 +563,7 @@ def build_context(hits, max_chars=MAX_CONTEXT_CHARS):
     return f"BEGIN CONTEXT\n{context}\nEND CONTEXT{note}"
 
 
-def answer_from(query, hits, on_token=None):
+def answer_from(query, hits, on_token=None, stats=None):
     """Generate a grounded answer from already-retrieved `hits`.
 
     Split out of `answer()` so a caller that retrieved separately — to report progress in
@@ -574,6 +592,7 @@ def answer_from(query, hits, on_token=None):
     if on_token is None:
         resp = llm.chat.completions.create(model=CHAT_MODEL, messages=messages)
         text = resp.choices[0].message.content
+        _capture_token_stats(resp, stats)
     else:
         parts = []
         for chunk in llm.chat.completions.create(model=CHAT_MODEL, messages=messages, stream=True):
@@ -581,6 +600,7 @@ def answer_from(query, hits, on_token=None):
             if piece:
                 parts.append(piece)
                 on_token(piece)
+            _capture_token_stats(chunk, stats)
         text = "".join(parts)
 
     sources = "\n".join(f"  [{i + 1}] {_label(h)} (score {h.score:.2f})" for i, h in enumerate(hits))

@@ -262,6 +262,11 @@ answer → MCP progress notifications → answer_docs
 Verified live: Ollama serving on `:11434`, `qwen2.5:7b` context length **32768**, and token
 counters (`prompt_eval_count`, `eval_count`) present in real generation responses.
 
+The harness now reads that usage back: `rag_service.answer_from` captures the OpenAI-style
+`usage` object from the generation response and `answer_docs` returns it with the answer as a
+trailing `[token usage: prompt_tokens=… completion_tokens=…]` line, so token measurement runs
+through the real pipeline instead of by hand-calling Ollama per generation.
+
 ### Other inference options
 
 Ollama is the current choice, not the only one. The layer boundary is what matters — any
