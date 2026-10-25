@@ -322,6 +322,84 @@ frameworks handle it, and it is the natural next structural step after this.
 | [agentskills.io](https://agentskills.io) | The format is implemented; the spec explains the skipped parts |
 | LangGraph / Vercel AI SDK source | Reference implementations of streaming, retries and tool loops |
 
+## Learning directions
+
+Broader concepts worth implementing to learn harness / inference / agent / LLM engineering.
+Ordered by concept, not difficulty.
+
+### Inference
+
+- Quantization experiments (Q4 vs Q3 vs Q2) with quality/latency numbers.
+- KV-cache tuning (`num_ctx`, flash attention, quantized KV) and its effect on prefill/decode.
+- Speculative decoding with a draft model.
+- Batching for embeddings and multi-query retrieval.
+- Model comparison harness across quality, latency, and tokens.
+
+### Retrieval and RAG
+
+- Hybrid search (BM25 sparse + dense + reciprocal rank fusion).
+- Cross-encoder reranking.
+- Chunking strategy experiments (structure-aware vs fixed vs semantic).
+- Query rewriting / HyDE.
+- Multi-hop retrieval.
+- Context compression / summarization.
+
+### Agents and orchestration
+
+- Multi-step research agent with planning, branching, retries, checkpointing.
+- Subagents with isolated context.
+- Short- and long-term memory.
+- Tool result caching and idempotency.
+- Parallel tool calls.
+- Reflection / self-critique loops.
+
+### Prompting and model behaviour
+
+- System prompt variants and A/B testing against tuning/holdout sets.
+- Few-shot example ordering (already measured to be load-bearing).
+- Temperature / top-p / top-k sweeps.
+- Prompt injection red-teaming of uploads.
+
+### Evaluation and measurement
+
+- Unit tests via in-process `Client(mcp)`.
+- LLM-as-judge for prose quality (with caveats).
+- Latency and throughput benchmarks with regression tracking.
+
+### Safety and security
+
+- Sandboxed code execution instead of `subprocess`.
+- Per-tool allow/deny lists and read-only modes.
+- Token expiry, revocation, and rotation.
+- Input validation and rate limiting.
+
+### Observability
+
+- Distributed tracing across router / retrieval / generation.
+- Metrics export (latency histograms, token counts).
+- Structured logging with correlation IDs.
+
+### Systems and infra
+
+- Async retrieval and non-blocking I/O.
+- Multi-layer caching (embeddings, retrieval, answers).
+- Horizontal scaling and load balancing.
+- Multi-tenant isolation.
+
+### Data and knowledge
+
+- Incremental indexing and change detection (done).
+- Multi-format parsing improvements.
+- Metadata filtering and doc-type routing.
+- Knowledge graph / entity extraction.
+
+### UX and product
+
+- Streaming partial answers in the UI (done at server; UI ignores progress).
+- Citation highlighting and source preview.
+- Feedback capture feeding evals.
+- Multi-user / per-user corpora.
+
 ## Honest note
 
 The architecture is stronger than most agent repos, and the reasoning in the commit
