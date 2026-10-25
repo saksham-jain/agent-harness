@@ -423,7 +423,8 @@ $('bar').onsubmit = async (e) => {
     if (cut > 0) {
       const s = document.createElement('div');
       s.className = 'src';
-      s.textContent = text.slice(cut + 2).replace(/\s*\n\s*/g, ' ');
+      const srcText = text.slice(cut + 2).replace(/\s*\[token usage:[^\]]*\]\s*$/, '');
+      s.textContent = srcText.replace(/\s*\n\s*/g, ' ');
       pending.appendChild(s);
     }
     // Token usage Ollama reported rides along in the answer text. The sources marker
