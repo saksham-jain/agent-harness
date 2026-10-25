@@ -203,6 +203,7 @@ async def answer_docs(query: str, ctx: Context) -> str:
     emitted = 0
     loop = asyncio.get_running_loop()
     stats = {}
+    started = time.perf_counter()
     try:
         await ctx.report_progress(0.0, None, "searching the corpus")
         hits = await loop.run_in_executor(None, rag_service.retrieve, query)
@@ -219,10 +220,16 @@ async def answer_docs(query: str, ctx: Context) -> str:
         if isinstance(e, ToolError):
             raise
         return rag_service.answer_error(query, e)
+    elapsed = time.perf_counter() - started
+    suffix = ""
     if stats.get("prompt_tokens") is not None:
         # Token usage now travels with the answer, so measurement happens inside the
         # harness instead of by hand-calling Ollama per generation.
-        text = f"{text}\n\n[token usage: prompt_tokens={stats.get('prompt_tokens')} completion_tokens={stats.get('completion_tokens')}]"
+        suffix += f"\n\n[token usage: prompt_tokens={stats.get('prompt_tokens')} completion_tokens={stats.get('completion_tokens')}]"
+    # Generation time travels with the answer too, so it is visible in the UI and the
+    # terminal rather than only in server logs.
+    suffix += f"\n\n[response time: {elapsed:.2f}s]"
+    text = f"{text}{suffix}"
     return text
 
 
