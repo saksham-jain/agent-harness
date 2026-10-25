@@ -1,14 +1,31 @@
 {
   "_comment": [
-    "Labelled eval cases. sources are matched on basename so the same case works",
-    "whether the index was built on the host or inside the container.",
+    "Labelled eval cases against docs.sample/. sources are matched on basename so the",
+    "same case works whether the index was built on the host or inside the container.",
     "must_retrieve: the router is expected to offer answer_docs for this question.",
     "must_abstain: answer_docs is expected to say it does not know.",
     "must_cite: the answer must carry [n] citations that resolve to sources.",
-    "model_ok: whether the main model would call answer_docs when the router said yes.",
-    "it is scored separately because routing accuracy read 1.00 while the agent was",
-    "completely broken - the 7B answered \"no tool\" instead of searching. run_turn now",
-    "forces the call, so this column measures what the prompt alone would have done."
+    "",
+    "Every 'sources' entry names a file that exists. The corpus is 21 documents across",
+    "markdown, csv, json, python, text and pdf, so retrieval is measured rather than",
+    "scored against a single 65-byte file.",
+    "",
+    "'cases' is the TUNING set - it may be tuned against, so its score is optimistic.",
+    "'holdout' is written afterwards and never tuned against; that is the honest number,",
+    "and it is what the exit code gates on.",
+    "",
+    "The holdout has been rewritten TWICE, and both times for the same reason. The first",
+    "one revealed that the router was answering 'no' to nine document questions; the",
+    "second was retired because the eval run that exposed a broken router prompt also",
+    "showed its score, so it could no longer be an untouched set. The current set has",
+    "never been run against a tuned system. It is not decoration - retire a holdout the",
+    "moment you look at its per-case results.",    "",
+    "h-nhs and h-bp are near-miss negatives: a relevant document exists, so the router",
+    "must still route, but the answer is not in it. They must abstain.",
+    "",
+    "car-excess is in the tuning set because it FAILS: insurance.md scores 0.491 at",
+    "rank 4 against 0.517 for bike-maintenance.md, and the whole top-12 sits inside",
+    "0.06. Tuning material by definition - it was measured while building the corpus."
   ],
   "cases": [
     {
@@ -104,6 +121,116 @@
         "must_cite": true,
         "must_abstain": false
       }
+    },
+    {
+      "id": "lease-notice",
+      "query": "how many months notice do I have to leave the flat?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": [
+          "lease.md"
+        ],
+        "must_cite": true
+      }
+    },
+    {
+      "id": "lease-deposit",
+      "query": "what is the deposit on the flat?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": [
+          "lease.md"
+        ],
+        "must_cite": true
+      }
+    },
+    {
+      "id": "prescription",
+      "query": "what did the doctor prescribe?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": [
+          "hospital-letter.pdf"
+        ],
+        "must_cite": true
+      }
+    },
+    {
+      "id": "dental",
+      "query": "when is my dentist appointment?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": [
+          "dentist-reminder.pdf"
+        ],
+        "must_cite": true
+      }
+    },
+    {
+      "id": "beans",
+      "query": "what coffee beans am I drinking?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": [
+          "coffee-setup.md"
+        ],
+        "must_cite": true
+      }
+    },
+    {
+      "id": "deadlift",
+      "query": "what is my deadlift weight?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": [
+          "gym-routine.md"
+        ],
+        "must_cite": true
+      }
+    },
+    {
+      "id": "rota",
+      "query": "who is on the on-call rota?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": [
+          "meeting-2026-10-14.md"
+        ],
+        "must_cite": true
+      }
+    },
+    {
+      "id": "groceries",
+      "query": "what did I spend on groceries?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": [
+          "expenses-2026.csv"
+        ],
+        "must_cite": true
+      }
+    },
+    {
+      "id": "retention",
+      "query": "how long do we keep the raw readings?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": [
+          "project-hydrate.md"
+        ],
+        "must_cite": true
+      }
+    },
+    {
+      "id": "car-excess",
+      "query": "what is my car insurance excess?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": [
+          "insurance.md"
+        ],
+        "must_cite": true
+      }
     }
   ],
   "_holdout_comment": [
@@ -113,51 +240,269 @@
   ],
   "holdout": [
     {
-      "id": "h-booking-date",
-      "query": "when did I book that hotel?",
+      "id": "h-gate",
+      "query": "what time does the hotel gate close?",
       "expect": {
         "must_retrieve": true,
         "sources": [
-          "test.md"
+          "hotel-confirmation.pdf"
         ],
+        "answer_contains": "23:00",
         "must_cite": true
       }
     },
     {
-      "id": "h-venue-decision",
-      "query": "remind me what we decided about the venue",
+      "id": "h-bring",
+      "query": "what did the dentist ask me to bring?",
       "expect": {
         "must_retrieve": true,
-        "must_abstain": true
+        "sources": [
+          "dentist-reminder.pdf"
+        ],
+        "answer_contains": "invoice",
+        "must_cite": true
       }
     },
     {
-      "id": "h-my-email",
-      "query": "what's my email address on file?",
+      "id": "h-agent",
+      "query": "who is the landlord's letting agent?",
       "expect": {
         "must_retrieve": true,
-        "must_abstain": true
+        "sources": [
+          "contacts.md"
+        ],
+        "answer_contains": "okafor",
+        "must_cite": true
       }
     },
     {
-      "id": "h-photosynthesis",
-      "query": "explain photosynthesis in two sentences",
+      "id": "h-fpr",
+      "query": "what is the false positive rate on the anomaly detection?",
       "expect": {
-        "must_retrieve": false
+        "must_retrieve": true,
+        "sources": [
+          "project-hydrate.md"
+        ],
+        "answer_contains": "4",
+        "must_cite": true
       }
     },
     {
-      "id": "h-unit-conversion",
-      "query": "convert 5 km to miles",
+      "id": "h-chain",
+      "query": "how often should I oil the bike chain?",
       "expect": {
-        "must_retrieve": false
+        "must_retrieve": true,
+        "sources": [
+          "bike-maintenance.md"
+        ],
+        "answer_contains": "200",
+        "must_cite": true
       }
     },
     {
-      "id": "h-python-help",
-      "query": "how do I reverse a list in python?",
+      "id": "h-boiler-cost",
+      "query": "what did the boiler service cost?",
       "expect": {
-        "must_retrieve": false
+        "must_retrieve": true,
+        "sources": [
+          "expenses-2026.csv"
+        ],
+        "answer_contains": "95",
+        "must_cite": true
+      }
+    },
+    {
+      "id": "h-contents",
+      "query": "what is the contents insurance value?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": [
+          "insurance.md"
+        ],
+        "answer_contains": "48,000",
+        "must_cite": true
+      }
+    },
+    {
+      "id": "h-db",
+      "query": "which database did the project choose?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": [
+          "project-hydrate.md"
+        ],
+        "answer_contains": "sqlite",
+        "must_cite": true
+      }
+    },
+    {
+      "id": "h-renewal",
+      "query": "when does the home policy renew?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": [
+          "insurance.md"
+        ],
+        "answer_contains": "march",
+        "must_cite": true
+      }
+    },
+    {
+      "id": "h-deposit-months",
+      "query": "how many months deposit does the building ask for?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": [
+          "apartments.json"
+        ],
+        "answer_contains": "1",
+        "must_cite": true
+      }
+    },
+    {
+      "id": "h-deploy-order",
+      "query": "what has to run first during a deploy?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": [
+          "deploy-notes.py"
+        ],
+        "answer_contains": "migrat",
+        "must_cite": true
+      }
+    },
+    {
+      "id": "h-leverage",
+      "query": "who wrote the book about leverage points?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": [
+          "reading-notes.md"
+        ],
+        "answer_contains": "meadows",
+        "must_cite": true
+      }
+    },
+    {
+      "id": "h-14c",
+      "query": "how much is the rent on flat 14C?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": [
+          "apartments.json"
+        ],
+        "answer_contains": "1520",
+        "must_cite": true
+      }
+    },
+    {
+      "id": "h-bench",
+      "query": "what is my bench press weight?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": [
+          "gym-routine.md"
+        ],
+        "answer_contains": "60",
+        "must_cite": true
+      }
+    },
+    {
+      "id": "h-paint",
+      "query": "can I repaint the walls?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": [
+          "lease.md"
+        ],
+        "answer_contains": "permission",
+        "must_cite": true
+      }
+    },
+    {
+      "id": "h-ledger",
+      "query": "how many entries are in the ledger for Q2?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": [
+          "ledger-2026.md"
+        ],
+        "answer_contains": "10",
+        "must_cite": true
+      }
+    },
+    {
+      "id": "h-grinder",
+      "query": "what coffee grinder do I use?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": [
+          "coffee-setup.md"
+        ],
+        "answer_contains": "c40",
+        "must_cite": true
+      }
+    },
+    {
+      "id": "h-dishwasher",
+      "query": "when does the dishwasher cover end?",
+      "expect": {
+        "must_retrieve": true,
+        "sources": [
+          "appliance-warranty.txt"
+        ],
+        "answer_contains": "2029",
+        "must_cite": true
+      }
+    },
+    {
+      "id": "h-nhs",
+      "query": "what is my NHS number?",
+      "expect": {
+        "must_retrieve": true,
+        "must_abstain": true,
+        "must_cite": false
+      }
+    },
+    {
+      "id": "h-bp",
+      "query": "what did the doctor say about my blood pressure?",
+      "expect": {
+        "must_retrieve": true,
+        "must_abstain": true,
+        "must_cite": false
+      }
+    },
+    {
+      "id": "h-spider",
+      "query": "how many legs does a spider have?",
+      "expect": {
+        "must_retrieve": false,
+        "must_abstain": false
+      }
+    },
+    {
+      "id": "h-prime",
+      "query": "what is the next prime number after 100?",
+      "expect": {
+        "must_retrieve": false,
+        "must_abstain": false
+      }
+    },
+    {
+      "id": "h-git",
+      "query": "how do I rebase a branch in git?",
+      "expect": {
+        "must_retrieve": false,
+        "must_abstain": false
+      }
+    },
+    {
+      "id": "h-temp",
+      "query": "what is the boiling point of water at sea level?",
+      "expect": {
+        "must_retrieve": false,
+        "must_abstain": false
       }
     }
   ]

@@ -61,6 +61,9 @@ grounding prompt is the real guardrail, not `MIN_SCORE`.
 **Learned:** measure before building the guardrail, or you ship the wrong one with
 confidence.
 
+*(Measured on one document, and §11 repeats it on 21 — the conclusion held, and got
+sharper: the whole top-12 sits inside 0.06.)*
+
 ## 5. Layered architecture
 
 Restructured so each layer knows only the one below it:
@@ -108,6 +111,10 @@ the one place the model has no veto. `README.md` has the measurements, and the e
 
 Tried `qwen2.5:0.5b` first: **4/8, coin-flip, and it routed arithmetic to the corpus.**
 1.5b scored 6/8. Measured, not assumed.
+
+*(§11 replaces this prompt. The prose version below turned out to have nine false
+negatives once the corpus was big enough to tell — the 6/8 was measured on eight
+questions, which is not enough to see them.)*
 
 **Learned:** the asymmetric-cost reasoning determined the design more than the model
 choice did. Also: an unloaded model costs ~12s to load, more than the routing call saves
@@ -175,6 +182,131 @@ HTTP header, so stdio and the in-process `Client(mcp)` never see auth — a test
 `Client(mcp)` proves nothing about authentication. Full design and the measured handshake:
 [AUTH-TLS.md](AUTH-TLS.md).
 
+## 11. A corpus, and what it exposed
+
+Everything above was measured against a corpus of **one file, 65 bytes**. That is enough
+to test plumbing and not enough to measure retrieval, and it had quietly become the
+reason several numbers in this repository were anecdotes.
+
+So: **21 documents, 35 chunks**, across six formats — markdown, CSV, JSON, Python, plain
+text and PDF — with the three PDFs hand-written and then checked through `pypdf`, because
+the last hand-written PDF in this project was rejected by `pypdf` and proved nothing. The
+documents were written to have checkable facts in them, so a case can assert on a value
+rather than on a topic.
+
+Three things stopped being true the moment it existed.
+
+### The eval was measuring nothing
+
+`recall@4` had read **0.00** on every case since the payload key was renamed from `file`
+to `doc_id`. The runner asked for `payload["file"]`, got `""` for every point, matched no
+source, and reported a perfect zero. It looked exactly like a retrieval result.
+
+Fixed, it reads **1.00** on both sets. Retrieval was working the whole time; the number
+was a broken matcher wearing a measurement's clothes.
+
+The lesson is not "add tests". It is that **a rename is not finished when the writer has
+updated it** — every other reader of that payload has to be found, and the one that was
+left behind produced a plausible-looking number for weeks.
+
+### The score overlap was real, and worse than measured
+
+The `MIN_SCORE` problem had been documented from a one-document corpus. On 21 documents
+it is sharper:
+
+```
+the CORRECT document, insurance.md:  0.491, rank 4 of 35
+the winner, bike-maintenance.md:     0.517
+gap:                                  0.025
+
+top-12: 0.517 0.502 0.497 0.491 0.489 0.482 0.480 0.478 0.473 0.466 0.463 0.457
+```
+
+The whole field is inside **0.06** of each other. Any floor that admits rank 1 also
+admits rank 4, so **no threshold separates them** — not a badly-chosen one, none. The
+correct answer lost by 0.025 on a question where the word "excess" appears literally in
+the right document, because a dense vector scores a document about bicycles *above* a
+document about car insurance.
+
+That is the case for hybrid search, and it is now a measurement rather than a preference.
+
+### The router was answering "no" to almost everything
+
+With a real corpus and a real case set, the router's score was **0.54** on the holdout
+with **nine false negatives** — the damaging kind, where `answer_docs` is hidden and the
+model cannot search at all. It answered "no" to *"what did the doctor prescribe?"* and to
+*"how many months notice do I have to leave the flat"*.
+
+The cause is the one already recorded for the 7B in §7, one layer down: **the prompt
+described the decision instead of demonstrating it.** It listed categories — "first person
+or possessive", "their own plans" — and a question without a pronoun read as general
+knowledge. A 7B with the same prompt was worse still: **0.38, twenty false negatives**.
+
+Four fixes were tried and measured:
+
+| Router | Result | False negatives |
+| --- | --- | --- |
+| Prose prompt, 1.5B | 0.69 | 9 |
+| Prose prompt + corpus manifest | 0.44 | 18 |
+| Prose prompt, **7B** | 0.38 | 20 |
+| One-line prompt, 1.5B | 0.19 | 26 |
+| **Few-shot, 1.5B** | **0.84** | **0** |
+
+The manifest made it *worse*. Grounding a 7B is worth doing; grounding a 1.5B with 21
+filenames is not.
+
+What actually worked was showing six decisions instead of describing one, and the
+**order** turned out to be load-bearing. Moving the "yes" examples to the front dropped
+it to 0.53 with six false negatives; eight examples were worse than six. The last example
+sets the bias, so the prompt ends on "yes" — which is the right bias here anyway, because
+a false yes only adds an option the model can ignore while a false no means the documents
+can never be searched.
+
+The examples are deliberately generic and appear in **no eval case**, so the tuning set
+stays a clean measure of the prompt.
+
+### The trap: making the prompt clearer made it five times worse
+
+The shipped prompt had one more sentence than the one I measured. It read:
+
+> Decide if the message needs the user's own documents. **Answer no only for arithmetic,
+> general knowledge, coding questions, or a named file in the working directory. If you
+> are unsure, answer yes.**
+
+It is a better prompt. It is also a **disaster**, and the eval said so:
+
+```
+the text I measured:   0.84   0 false negatives
+the text I shipped:    0.16   15 false negatives
+```
+
+Same model, same temperature, same examples, one sentence different. "Answer no only
+for…" primes the model to answer *no*, and the demonstrations after it cannot overcome
+the instruction. Adding *"If you are unsure, answer yes"* to either end cost 0.10.
+
+A 1.5B does not read a rule and then apply it to the examples. It pattern-matches, and
+**any instruction in the prompt competes with the pattern**. The shipped string is now six
+worked examples and one neutral lead sentence, and nothing else.
+
+**Learned:** a small model does not need a better *description* of the decision, it needs
+to see the decision made — and the least helpful thing you can do is explain it. And the
+holdout was rewritten afterwards — the old one had earned its keep by revealing the bug,
+but a set you have inspected cannot report an honest score.
+
+### Where it landed
+
+On a holdout written afterwards and never tuned against, 24 cases:
+
+```
+retrieval recall@4   0.83   (18 cases)
+routing accuracy     0.83   (24 cases)   0 false negatives, 4 false positives
+```
+
+All four routing errors are the cheap direction — general knowledge routed to the corpus.
+All three recall errors are one problem: the correct document is in the corpus and scores
+just below the cut (ranks 6, 12 and 6; within 0.03–0.09 of the winner). That is the
+hybrid-search limitation, not a broken pipeline, and it is the next thing to fix.
+
 ## Mistakes worth listing
 
 | Mistake | Cost |
@@ -203,6 +335,14 @@ HTTP header, so stdio and the in-process `Client(mcp)` never see auth — a test
 | Basename fallback when handling legacy points | Kept a duplicate of a live document. The reasoning was wrong: a run either writes a modern point or finds one already there, so a legacy key is always redundant |
 | `tailscale funnel --bg 443 <url>` | The port is a flag. It failed with `invalid argument format` while looking plausible |
 | Raw `curl` for `tools/list` returned `Missing session ID` | Streamable HTTP needs an `initialize` handshake first. The tunnel was fine; the test was wrong |
+| Renamed a payload key and left one reader behind | `payload["file"]` became `payload["doc_id"]`, and the eval runner still read the old name. It matched no source, so `recall@4` read **0.00** on every case — a number that looked like a retrieval result and was a broken matcher |
+| Measured retrieval on a one-document corpus and called the numbers real | `recall@4 = 0.00` was a scoring artefact, and the top-1 score overlap that ruled out `MIN_SCORE` was measured on a 65-byte file. Both needed 21 documents to become facts |
+| Described the decision to the router instead of demonstrating it | A prose prompt scored 0.69 with **nine** false negatives. The 1.5B answered "no" to "what did the doctor prescribe?" because the prompt never showed what a yes looks like |
+| Put the corpus manifest in the router prompt | It got *worse* — 0.44. Twenty-one filenames in the preamble drown a 1.5B's attention. Grounding helps a 7B; it does not scale down |
+| Reordered the router's examples and kept the score | Moving the "yes" examples to the front dropped accuracy to 0.53 with six false negatives. The last example sets the bias, and the prompt is only as good as its ordering |
+| Clarified the router prompt and made it five times worse | One extra sentence — "Answer no only for arithmetic, general knowledge…" — took it from **0.84 to 0.16** with fifteen false negatives. It is a better-written prompt and a worse one, and the difference was invisible until the eval ran |
+| Read the holdout's score, then used it to pick the fix | The holdout had to be retired and rewritten. A set you have looked at cannot report an honest number, and the second rewrite was needed even though the fix was chosen on the tuning set alone |
+| Ran the "fast" eval in the foreground and waited 30 minutes | `--fast` was making one 7B generation per case for the `model would call` column. `--no-model` now runs the same checks in ~20s, and the full column is still one flag away |
 
 ## What is still open
 
@@ -214,8 +354,8 @@ HTTP header, so stdio and the in-process `Client(mcp)` never see auth — a test
 | Public hostname + real certificate | **done** — Tailscale Funnel, Let's Encrypt |
 | LAN exposure | **done** — `127.0.0.1:8000:8000`; `192.168.1.3:8000` refuses |
 | Tests | Zero, though evals exist |
-| Corpus | One 65-byte file, so retrieval numbers are an anecdote |
-| Retrieval at scale | `top-4` now dedupes across documents and chunks follow structure, but nothing has been measured above ~10 documents yet |
+| Corpus | **done** — 21 documents, 6 formats, 35 chunks. Now a corpus worth measuring against |
+| Retrieval at scale | `top-4` dedupes across documents and chunks follow structure. `recall@4` is 1.00, but **ranking** is not: the correct document loses by 0.025 on a 21-document corpus, so hybrid search is the open item |
 | Prompt injection | Document text enters prompts unescaped |
 | Real auth | Static table: no expiry, revocation needs a restart. Per-tool scopes now split read from write |
 | Ran `DELETE` against the live Qdrant to prove it was exposed | It was — and it **deleted the index**. Rebuilt from the originals on disk in one command, which is the filesystem-as-source-of-truth design paying off, but the indexer had already been proven not to prune a corpus it cannot see |

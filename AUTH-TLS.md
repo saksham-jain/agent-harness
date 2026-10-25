@@ -24,7 +24,7 @@ Originally, anything that could reach port 8000 got full access. Verified, not a
 
 ```
 no credentials of any kind -> ['answer_docs', 'list_docs', 'refresh_index', 'index_status']
-list_docs returned         -> { "file": "/docs/Saksham-Jain-Resume.pdf", "chunks": 5 }
+list_docs returned         -> { "doc_id": "uploads/resume.pdf", "chunks": 5 }
 ```
 
 Zero credentials retrieved the corpus. Four concrete exposures:
@@ -239,18 +239,34 @@ and one forgotten `filter=` leaks. One collection per user makes a leak structur
 impossible, at the cost of more collections. Overkill for the first cut; **the wrong
 omission is a shared collection with a filter that gets dropped.**
 
-### 3. Document identity — must be fixed first
+### 3. Document identity — done
 
-`rag_service` keys documents by **absolute filesystem path**:
+`rag_service` used to key documents by **absolute filesystem path**:
 
 ```python
-payload={"file": path, ...}   # path is the delete/update filter key
+payload={"file": path, ...}   # path was the delete/update filter key
 ```
 
 Two tenants who both upload `notes.md` collide, and `refresh_index` would delete each
 other's chunks. Under a local mount this is cosmetic; with two users it is a
-cross-tenant data loss bug. Introduce a `doc_id` that is stable and tenant-scoped, and
-stop using paths as keys.
+cross-tenant data loss bug. The key is now `doc_id` — the path **relative to the docs
+directory** — and `source` carries the absolute path for display only:
+
+```python
+payload={"doc_id": doc_id, "source": path, ...}   # doc_id is the filter key
+```
+
+Two things followed from that, and both were bugs before they were features: indexing the
+same corpus from the host and from a container produced one set of points instead of two,
+and a document that failed to read stayed in the index rather than being deleted — a read
+error is not a deletion.
+
+**The stale key outlived the change, and that is the part worth remembering.** The eval
+runner still read `payload["file"]` after the field was renamed, so it saw an empty string
+for every point, matched no source, and reported `recall@4 = 0.00` on every case — a
+number that looked like a retrieval result and was in fact a broken matcher. A rename that
+is correct everywhere it was applied is still a rename, and every other reader of the
+payload has to be found.
 
 ### 4. TLS
 
@@ -590,7 +606,7 @@ Two directories, one committed and one not:
 
 | | |
 |---|---|
-| `docs.sample/` | committed. One small file, `test.md`, and all 13 eval cases expect it |
+| `docs.sample/` | committed. **21 documents** across six formats — markdown, CSV, JSON, Python, text, PDF — and every `sources` entry in `evals/cases.json` names one of them |
 | `docs/` | **gitignored.** Your real documents |
 
 `DOCS_DIR` selects which, and compose defaults to `docs.sample` so a fresh clone indexes

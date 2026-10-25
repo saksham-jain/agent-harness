@@ -11,38 +11,56 @@ difficulty.
 | Protocol correctness (MCP v2) | done |
 | Incremental indexing | done |
 | Grounded answers with citations | done |
-| Small-model routing | done |
-| Auth (bearer tokens) | done, static token table |
-| **TLS** | **not yet** — plaintext, localhost only |
-| **A hostname and a publicly-trusted certificate** | **not yet** — needed before anyone else can connect |
-| **Evaluation** | **nothing** |
-| **Tests** | **none** |
+| Small-model routing | done — few-shot prompt, **zero** false negatives on the tuning set |
+| Auth (bearer tokens) | done, static token table, per-tool scopes |
+| **TLS** | **done** — Tailscale Funnel, real Let's Encrypt certificate |
+| **A hostname and a publicly-trusted certificate** | **done** — `<machine>.<tailnet>.ts.net` |
+| **Evaluation** | **done** — labelled cases, a tuning set and a holdout, the exit code gates on it |
+| **Streaming** | **done** — tokens as MCP progress notifications |
+| **Corpus** | **done** — 21 documents across six formats, committed as `docs.sample/` |
+| **Upload** | **done** — staged, and indexed only after human approval |
+| **Tests** | **none** — evals exist, unit tests do not |
 | **Tracing / spans** | logs only |
-| **Streaming** | 37s of silence per document answer |
-| **Security** | document text goes into prompts unescaped; `bash` guarded by one prompt |
+| **Hybrid search** | **not yet** — and now measured to be the main retrieval limit |
+| Security | upload is gated by review, because fencing was measured insufficient |
 | Context management | history truncate cap |
 | Concurrency | serial |
 
-## 1. Evaluation — do this first
+## 1. ~~Evaluation~~ — done
 
-The gap that makes everything else safer. Twice now a measurement changed the design:
-the score overlap that ruled out `MIN_SCORE`, and the routing score that ruled out
-`qwen2.5:0.5b`. Both were done ad hoc. That is the pattern of someone who needs evals.
+The gap that made everything else safer. It changed the design twice more after the
+first version landed, and both times by contradicting a number this repository had been
+quoting.
 
-A labelled question set plus a scoring script:
+`evals/run.py`, split by cost: `--fast` scores retrieval and routing with no generation;
+`--full` adds abstention and citation checks. `cases.json` holds a **tuning set** and a
+**holdout**; the exit code gates on the holdout, because a tuned set always looks good.
 
-```python
-CASES = [
-    ("how long is the hotel booked?", "3 nights",  must_cite=True),
-    ("what is the capital of France?", "don't know", must_abstain=True),
-    ("who wrote dune?", "Herbert", must_not_use_docs=True),
-]
+What it found, in order:
+
+| Finding | What it changed |
+| --- | --- |
+| Routing was 0.43, not the 6/8 claimed | The 6/8 was arithmetic on cases the prompt was tuned against |
+| Routing was stochastic | Pinned `temperature=0`; two runs are now byte-identical |
+| `--full` never graded the holdout | The "honest" set was scored on routing alone |
+| `recall@4 = 0.00` on every case | The runner read a payload key renamed months earlier, so it matched nothing. After the fix: **1.00** on the tuning set |
+| The router had **nine false negatives** | The prompt described the decision instead of demonstrating it |
+| The fixed prompt was **five times worse** | One clarifying sentence — "Answer no only for arithmetic, general knowledge…" — took it from 0.84 to 0.16. A 1.5B pattern-matches; prose competes with the pattern |
+| The holdout was inspected | It had to be retired and rewritten. Twice, in the end |
+
+The pattern of someone who needs evals, and then keeps needing them. Three of the seven
+findings above were defects in the *measurement*, which is the usual failure: the number
+looks like a result either way.
+
+**Where it landed**, on a holdout written afterwards and never tuned against (24 cases):
+
+```
+retrieval recall@4   0.83   (18 cases)
+routing accuracy     0.83   (24 cases)   0 false negatives, 4 false positives
 ```
 
-`must_not_use_docs` is the important field — it scores *routing*, not just answer
-quality, which is the bug class that keeps recurring here.
-
-With that in place, each later change becomes measurable instead of a guess.
+**What is still missing:** unit tests, and a corpus large enough to expose the ranking
+problem more sharply. Twenty-one documents measures recall well and ranking only just.
 
 ## 2. Tests
 
@@ -79,9 +97,10 @@ reasons:
   span per request, so the transport is traced. What is invisible is the *inside*: which of
   router / retrieval / embedding / generation spent the 37 s. LangSmith wraps all of it and
   gives a shareable link per run.
-- **There is nothing else to measure against.** Zero tests, one 65-byte document, and
-  `recall@4 = 0.00`. Tracing is how you find out what a change actually did rather than
-  inferring it from one log line.
+- **There is something to measure against now.** 21 documents, six formats, 35 chunks, and
+  a labelled set with a holdout that gates the exit code. Tracing is still how you find out
+  what a change actually did rather than inferring it from one log line — but the baseline
+  it would be compared against is real.
 
 Free tier is enough for a solo project. It needs an account and `LANGCHAIN_TRACING_V2=true`
 plus an API key in `.env`.
@@ -235,24 +254,59 @@ shows up as a token that verifies locally and is rejected remotely.
 
 Design and staging: [AUTH-TLS.md](AUTH-TLS.md).
 
-## 6. Hybrid search and reranking
+## 6. Hybrid search and reranking — the main retrieval limit
 
-The measured failure: relevant top-1 scores 0.59 against 0.60–0.62 for irrelevant, so
-no threshold separates them. That is what pure dense retrieval does.
+This is now the top item, and it is the one place where a measurement changed the plan.
 
-BM25 (sparse) + dense + reciprocal rank fusion fixes the overlap directly, and Qdrant
-supports sparse vectors natively, so it needs no new service. Reranking with a
-cross-encoder is the usual follow-up.
+On the 21-document corpus, the correct document lost to the wrong one by **0.025**:
 
-This is now the main retrieval limitation. Two structural fixes have landed — chunks follow
-document structure, and `retrieve()` over-fetches then dedupes across documents so one long
-file cannot fill all four result slots — but neither addresses *scoring*, and scoring is
-where the measured failure is. `MAX_CHUNKS_PER_DOC=3` against `k=4` also still lets one
-document take three slots; raising `TOP_K` is the knob, the cap is the trade.
+```
+the CORRECT document, insurance.md:  0.491, rank 4 of 35
+the winner, bike-maintenance.md:     0.517
 
-None of it is measurable yet, because `docs/` holds one 65-byte file. `recall@4 = 0.00` on
-the holdout is a scoring artefact, not a retrieval failure. The 20–30 document sample corpus
-in section 1 is the prerequisite for measuring any of this.
+top-12: 0.517 0.502 0.497 0.491 0.489 0.482 0.480 0.478 0.473 0.466 0.463 0.457
+```
+
+The whole field is inside **0.06**. The word "excess" appears literally in the right
+document, and a dense vector still ranked a document about bicycles above a document about
+car insurance — because a *bike* is a *car*, and that is exactly what embeddings are good
+at.
+
+The same failure reproduces on a **fresh holdout** (24 cases, never tuned against), where
+all three recall failures are the same thing:
+
+| Query | Correct document | Rank | Score | Winner | Gap |
+| --- | --- | --- | --- | --- | --- |
+| *what did the boiler service cost?* | `expenses-2026.csv` | 6 of 35 | 0.531 | `lease.md` 0.622 | 0.091 |
+| *can I repaint the walls?* | `lease.md` | 12 of 35 | 0.524 | `meeting-2026-10-14.md` 0.585 | 0.061 |
+| *when does the dishwasher cover end?* | `appliance-warranty.txt` | 6 of 35 | 0.560 | `lease.md` 0.590 | 0.031 |
+
+The correct document is in the corpus every time and scores just below the cut. That is a
+scoring problem, not a pipeline problem, and it is the whole remaining retrieval gap.
+
+That settles two things which were previously open:
+
+- **`MIN_SCORE` cannot be tuned into working.** Any floor that admits rank 1 at 0.517
+  admits rank 4 at 0.491. There is no separating threshold, so the grounding prompt inside
+  `answer_docs` stays the guardrail and the score stays a diagnostic.
+- **A doc-type payload filter is a cheap interim, not a fix.** Filtering to
+  `kind=policy` for a policy question would fix this one case. It is a hand-written
+  answer to a scoring problem, and the next query would need a different hand.
+
+The real fix is **BM25 (sparse) + dense + reciprocal rank fusion**. Qdrant supports
+sparse vectors natively, so it needs no new service, and a sparse scorer gets "excess"
+literally right. Reranking with a cross-encoder is the usual follow-up — and it is the
+one that would fix *"can I repaint the walls?"*, which shares **no words at all** with
+"No decorating without written permission". Sparse retrieval would not fix that one; a
+model that reads both sentences would.
+
+Two structural fixes already landed — chunks follow document structure, and `retrieve()`
+over-fetches then dedupes across documents so one long file cannot fill all four result
+slots — but neither addresses *scoring*, and scoring is where the failure is.
+
+**Also open here:** `TOP_K` is a frozen default argument (`retrieve(query, k=4)`), so the
+knob is inert. `MAX_CHUNKS_PER_DOC=3` against `k=4` also still lets one document take
+three of four slots.
 
 ## 7. Subagents and context isolation
 
@@ -271,5 +325,10 @@ frameworks handle it, and it is the natural next structural step after this.
 ## Honest note
 
 The architecture is stronger than most agent repos, and the reasoning in the commit
-history is the differentiator. What is missing is its counterpart: evidence that the
-system works. That is item 1, and items 2–7 are polish until it exists.
+history is the differentiator. Its counterpart now exists: a labelled corpus, a holdout
+that gates the exit code, and a few measurements that contradicted numbers this repository
+had been quoting — including its own.
+
+What is still missing is the rest of the evidence: unit tests, a corpus big enough to
+expose ranking rather than recall, and a ranking fix. **Hybrid search is item 1 now**,
+and it is item 1 because the measurement says the correct document loses by 0.025.
