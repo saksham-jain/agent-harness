@@ -35,6 +35,8 @@ services:
       - CHAT_MAX_TOKENS=${CHAT_MAX_TOKENS:-512}
       - RETRIEVE_K=${RETRIEVE_K:-4}
       - MAX_CONTEXT_CHARS=${MAX_CONTEXT_CHARS:-12000}
+      - ANSWER_CACHE_TTL=${ANSWER_CACHE_TTL:-300}
+      - ANSWER_CACHE_SIZE=${ANSWER_CACHE_SIZE:-64}
       - LLM_KEEP_ALIVE=${LLM_KEEP_ALIVE:-30m}
       # Auth is off by default so local development needs no setup. Turn it on when
       # anything other than you can reach this container.
