@@ -24,3 +24,6 @@ tokens.json
 # docs.sample/ is committed and is what the evals index. Point DOCS_DIR at docs.sample to
 # run them, or at docs for your own corpus.
 docs/
+
+# Persisted answer cache (ANSWER_CACHE_FILE). Derived data, not source.
+cache/
