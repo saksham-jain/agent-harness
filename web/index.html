@@ -425,6 +425,7 @@ $('bar').onsubmit = async (e) => {
       s.className = 'src';
       const srcText = text.slice(cut + 2)
         .replace(/\s*\[model:[^\]]*\]\s*$/, '')
+        .replace(/\s*\[cached:[^\]]*\]\s*$/, '')
         .replace(/\s*\[token usage:[^\]]*\]\s*$/, '')
         .replace(/\s*\[response time:[^\]]*\]\s*$/, '');
       s.textContent = srcText.replace(/\s*\n\s*/g, ' ');
@@ -445,6 +446,12 @@ $('bar').onsubmit = async (e) => {
       const s = document.createElement('div');
       s.className = 'src';
       s.textContent = 'model: ' + md[1].trim();
+      pending.appendChild(s);
+    }
+    if (/\[cached:/.test(text)) {
+      const s = document.createElement('div');
+      s.className = 'src';
+      s.textContent = 'cached: answer served from cache';
       pending.appendChild(s);
     }
     const rt = text.match(/\[response time: ([\d.]+)s\]/);
