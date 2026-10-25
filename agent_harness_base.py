@@ -370,6 +370,16 @@ def select_tools(tools, wants_docs):
 
 
 @traceable(name="forced_answer_docs", run_type="tool")
+def _is_abstention(text):
+    if not text:
+        return False
+    low = text.lower()
+    return any(m in low for m in (
+        "no document matched", "does not contain", "no document",
+        "not contain", "unavailable", "no index found",
+    ))
+
+
 def force_answer_docs(bridge, query):
     """Call answer_docs because the router said to and the model did not. Returns the text.
 
@@ -407,19 +417,36 @@ def run_turn(messages, tools, bridge, prompt, wants_docs=None):
             # will not act on the same signal.
             if wants_docs and bridge is not None:
                 forced = force_answer_docs(bridge, prompt)
-                if forced:
+                if forced and not _is_abstention(forced):
                     # Print it. This is the answer the user asked for, and answer_docs
                     # already returns a finished, cited response rather than raw chunks, so
                     # there is nothing further to synthesise.
                     print(f"\n{forced}")
                     messages.append({"role": "assistant", "content": forced})
                     return
+                if forced:
+                    print("\n[documents did not cover this; answering from general knowledge]")
+
             if msg.content:
                 print(f"\n{msg.content}")
-            else:
-                # A small model sometimes stops without saying anything at all. Say so
-                # rather than leaving the user staring at an apparently dead agent.
-                print("\n[model returned nothing - try rephrasing, or call a tool with /call]")
+                return
+            # The model declined to answer and the tool did not cover it: ask once more
+            # without tools so the user still gets a reply.
+            try:
+                if messages and messages[-1].get("role") == "assistant" and not messages[-1].get("content"):
+                    messages.pop()
+                clean = [m for m in messages if not (m.get("role") == "assistant" and not m.get("content"))]
+                resp = _chat_create(clean, tools=None, model=MODEL)
+                content = resp.choices[0].message.content
+                if content:
+                    print(f"\n{content}")
+                    messages.append({"role": "assistant", "content": content})
+                    return
+            except Exception as e:
+                print(f"\n[fallback failed: {e}]")
+            # A small model sometimes stops without saying anything at all. Say so
+            # rather than leaving the user staring at an apparently dead agent.
+            print("\n[model returned nothing - try rephrasing, or call a tool with /call]")
             return
 
         if msg.content:
