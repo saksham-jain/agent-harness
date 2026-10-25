@@ -14,6 +14,34 @@ from openai import OpenAI
 from mcp_client import connect, result_to_text
 from skills import catalog, list_skills, load as load_skill_body
 
+# Optional LangSmith tracing. Off unless LANGCHAIN_TRACING_V2 is set and the package is
+# installed, so the harness stays dependency-light when tracing is not wanted. The
+# decorator is a no-op in that case, so call sites do not need to branch.
+_LANGSMITH_ON = os.getenv("LANGCHAIN_TRACING_V2", "").lower() in ("1", "true", "yes")
+try:
+    if _LANGSMITH_ON:
+        from langsmith import traceable as _ls_traceable
+    else:
+        _ls_traceable = None
+except Exception:
+    _LANGSMITH_ON = False
+    _ls_traceable = None
+
+
+def traceable(*args, **kwargs):
+    if _ls_traceable is not None:
+        return _ls_traceable(*args, **kwargs)
+
+    # No-op that supports both @traceable and @traceable(name=..., run_type=...).
+    if args and callable(args[0]) and not kwargs and len(args) == 1:
+        return args[0]
+
+    def _wrap(fn):
+        return fn
+
+    return _wrap
+
+
 client = OpenAI(
     base_url=os.getenv("LLM_BASE_URL", "http://localhost:11434/v1"),
     api_key=os.getenv("LLM_API_KEY", "ollama"),  # Ollama ignores the key
@@ -165,6 +193,7 @@ def _as_number(v):
         return None
 
 
+@traceable(name="local_tool", run_type="tool")
 def run_local_tool(name, args):
     try:
         if name == "load_skill":
@@ -275,6 +304,28 @@ router = OpenAI(
 )
 
 
+@traceable(name="llm.chat", run_type="llm")
+def _chat_create(messages, tools=None, model=None):
+    if model is None:
+        model = MODEL
+    kwargs = {"model": model, "messages": messages}
+    if tools is not None:
+        kwargs["tools"] = tools
+    return client.chat.completions.create(**kwargs)
+
+
+@traceable(name="llm.router", run_type="llm")
+def _router_create(messages):
+    return router.chat.completions.create(
+        model=ROUTER_MODEL,
+        messages=messages,
+        max_tokens=3,
+        temperature=0,
+        extra_body={"keep_alive": ROUTER_KEEP_ALIVE},
+    )
+
+
+@traceable(name="router", run_type="chain")
 def needs_documents(prompt):
     """One binary decision from the small model. True if the corpus is likely needed.
 
@@ -284,13 +335,7 @@ def needs_documents(prompt):
     if not ROUTER_MODEL:
         return None
     try:
-        resp = router.chat.completions.create(
-            model=ROUTER_MODEL,
-            messages=[{"role": "user", "content": ROUTER_PROMPT + prompt}],
-            max_tokens=3,
-            temperature=0,  # deterministic: an eval that moves between runs is useless
-            extra_body={"keep_alive": ROUTER_KEEP_ALIVE},
-        )
+        resp = _router_create([{"role": "user", "content": ROUTER_PROMPT + prompt}])
         return "yes" in (resp.choices[0].message.content or "").strip().lower()
     except Exception as e:
         print(f"  router unavailable ({e}); letting the main model decide")
@@ -316,6 +361,7 @@ def select_tools(tools, wants_docs):
     return local + docs if wants_docs else local
 
 
+@traceable(name="forced_answer_docs", run_type="tool")
 def force_answer_docs(bridge, query):
     """Call answer_docs because the router said to and the model did not. Returns the text.
 
@@ -331,10 +377,11 @@ def force_answer_docs(bridge, query):
         return None
 
 
+@traceable(name="turn", run_type="chain")
 def run_turn(messages, tools, bridge, prompt, wants_docs=None):
     messages.append({"role": "user", "content": prompt})
     for _ in range(MAX_STEPS):
-        resp = client.chat.completions.create(model=MODEL, messages=messages, tools=tools)
+        resp = _chat_create(messages, tools=tools, model=MODEL)
         msg = resp.choices[0].message
         messages.append(msg.model_dump(exclude_none=True))
 

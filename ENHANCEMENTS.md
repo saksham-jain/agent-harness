@@ -20,7 +20,7 @@ difficulty.
 | **Corpus** | **done** — 21 documents across six formats, committed as `docs.sample/` |
 | **Upload** | **done** — staged, and indexed only after human approval |
 | **Tests** | **none** — evals exist, unit tests do not |
-| **Tracing / spans** | logs only |
+| **Tracing / spans** | optional — LangSmith, off by default (env-gated) |
 | **Hybrid search** | **not yet** — and now measured to be the main retrieval limit |
 | Security | upload is gated by review, because fencing was measured insufficient |
 | Context management | history truncate cap |
