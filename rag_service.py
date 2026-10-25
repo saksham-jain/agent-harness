@@ -15,6 +15,8 @@ Env:
 import hashlib
 import os
 import re
+import threading
+import time
 import uuid
 
 from openai import OpenAI
@@ -40,6 +42,41 @@ CHAT_MAX_TOKENS = int(os.getenv("CHAT_MAX_TOKENS", "512"))
 # How many chunks reach the model. TOP_K is the frozen corpus default; this lets the
 # caller tune it without editing corpus.py.
 RETRIEVE_K = int(os.getenv("RETRIEVE_K", str(TOP_K)))
+
+# In-memory answer cache. Identical queries skip generation entirely.
+ANSWER_CACHE_TTL = int(os.getenv("ANSWER_CACHE_TTL", "300"))
+ANSWER_CACHE_SIZE = int(os.getenv("ANSWER_CACHE_SIZE", "64"))
+_answer_cache = {}
+_answer_cache_lock = threading.Lock()
+
+
+def _cache_get(query):
+    if ANSWER_CACHE_TTL <= 0 or ANSWER_CACHE_SIZE <= 0:
+        return None
+    key = query.strip().lower()
+    with _answer_cache_lock:
+        entry = _answer_cache.get(key)
+        if entry is None:
+            return None
+        text, stats, ts = entry
+        if time.time() - ts > ANSWER_CACHE_TTL:
+            _answer_cache.pop(key, None)
+            return None
+        # Move to end (most recently used).
+        _answer_cache[key] = (text, dict(stats), ts)
+        return text, dict(stats)
+
+
+def _cache_set(query, text, stats):
+    if ANSWER_CACHE_TTL <= 0 or ANSWER_CACHE_SIZE <= 0:
+        return
+    key = query.strip().lower()
+    with _answer_cache_lock:
+        _answer_cache[key] = (text, dict(stats or {}), time.time())
+        # Evict oldest entries beyond the size cap.
+        while len(_answer_cache) > ANSWER_CACHE_SIZE:
+            oldest = next(iter(_answer_cache))
+            _answer_cache.pop(oldest, None)
 
 # Upload limits. Applied before anything is written, not after.
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
@@ -596,6 +633,15 @@ def answer_from(query, hits, on_token=None, stats=None):
     model = _select_model(query)
     if stats is not None:
         stats["model"] = model
+
+    cached = _cache_get(query)
+    if cached is not None:
+        cached_text, cached_stats = cached
+        if stats is not None:
+            stats.clear()
+            stats.update(cached_stats)
+        return cached_text
+
     messages = [
         {"role": "system", "content": GROUNDING},
         {
@@ -640,4 +686,6 @@ def answer_from(query, hits, on_token=None, stats=None):
         text = "".join(parts)
 
     sources = "\n".join(f"  [{i + 1}] {_label(h)} (score {h.score:.2f})" for i, h in enumerate(hits))
-    return f"{text}\n\nSources:\n{sources}"
+    result = f"{text}\n\nSources:\n{sources}"
+    _cache_set(query, result, stats)
+    return result
