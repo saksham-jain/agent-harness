@@ -202,6 +202,7 @@ async def answer_docs(query: str, ctx: Context) -> str:
 
     emitted = 0
     loop = asyncio.get_running_loop()
+    stats = {}
     try:
         await ctx.report_progress(0.0, None, "searching the corpus")
         hits = await loop.run_in_executor(None, rag_service.retrieve, query)
@@ -213,11 +214,15 @@ async def answer_docs(query: str, ctx: Context) -> str:
             # report_progress is async; the generator runs in a worker thread.
             asyncio.run_coroutine_threadsafe(on_token(piece), loop).result()
 
-        text = await loop.run_in_executor(None, lambda: rag_service.answer_from(query, hits, sync_on_token))
+        text = await loop.run_in_executor(None, lambda: rag_service.answer_from(query, hits, sync_on_token, stats))
     except Exception as e:
         if isinstance(e, ToolError):
             raise
         return rag_service.answer_error(query, e)
+    if stats.get("prompt_tokens") is not None:
+        # Token usage now travels with the answer, so measurement happens inside the
+        # harness instead of by hand-calling Ollama per generation.
+        text = f"{text}\n\n[token usage: prompt_tokens={stats.get('prompt_tokens')} completion_tokens={stats.get('completion_tokens')}]"
     return text
 
 
