@@ -628,6 +628,26 @@ INFO    mcp.tools: answer_docs(query='how long is the trip?') -> 'The hotel is b
 WARNING mcp.tools: refresh_index() failed after 120ms: No supported files found in '/docs'
 ```
 
+## Metrics (free)
+
+The MCP server exposes a Prometheus endpoint at `/metrics` (when `prometheus_client` is
+installed). It includes retrieval/generation latency histograms, token counters, and cache
+hits.
+
+Run Prometheus and Grafana for free (self-hosted OSS, or Grafana Cloud free tier):
+
+```bash
+# prometheus.yml
+scrape_configs:
+  - job_name: agent-harness
+    static_configs:
+      - targets: ['host.docker.internal:8000']
+```
+
+Then point Grafana at Prometheus as a data source and build dashboards over
+`rag_retrieve_seconds`, `rag_generate_seconds`, `rag_tokens_total`, and
+`rag_cache_hits_total`.
+
 ## Gotchas
 
 - **Bind `0.0.0.0`.** `mcp.run()` defaults to `127.0.0.1`, unreachable from other containers.
