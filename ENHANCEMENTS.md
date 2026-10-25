@@ -331,6 +331,10 @@ Ordered by concept, not difficulty.
 
 - Quantization experiments (Q4 vs Q3 vs Q2) with quality/latency numbers.
 - KV-cache tuning (`num_ctx`, flash attention, quantized KV) and its effect on prefill/decode.
+  - Prefill is the prompt-processing phase: its cost grows with prompt length, so trimming
+    context (`MAX_CONTEXT_CHARS`, `RETRIEVE_K`) and shrinking `num_ctx` both speed it up.
+  - Decode is the serial token-generation phase; smaller models and lower `CHAT_MAX_TOKENS`
+    help most there.
 - Speculative decoding with a draft model.
 - Batching for embeddings and multi-query retrieval.
 - Model comparison harness across quality, latency, and tokens.
