@@ -25,6 +25,9 @@ from corpus import MAX_CHUNKS_PER_DOC, TOP_K, TOP_N, chunk, embed, list_files, r
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 CHAT_MODEL = os.getenv("LLM_MODEL", "qwen2.5:7b")
+# Optional cheaper/faster model used for short, simple queries. Empty disables it.
+FAST_MODEL = os.getenv("FAST_MODEL", "")
+FAST_MODEL_THRESHOLD = int(os.getenv("FAST_MODEL_THRESHOLD", "80"))
 EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
 DOCS_DIR = os.getenv("DOCS_DIR", "/docs")
 MIN_SCORE = float(os.getenv("MIN_SCORE", "0.5"))
@@ -570,6 +573,14 @@ def build_context(hits, max_chars=MAX_CONTEXT_CHARS):
     return f"BEGIN CONTEXT\n{context}\nEND CONTEXT{note}"
 
 
+def _select_model(query):
+    """Pick the generation model. A fast (smaller) model is used for short queries when
+    FAST_MODEL is configured; longer queries keep the full model for quality."""
+    if FAST_MODEL and len(query) <= FAST_MODEL_THRESHOLD:
+        return FAST_MODEL
+    return CHAT_MODEL
+
+
 def answer_from(query, hits, on_token=None, stats=None):
     """Generate a grounded answer from already-retrieved `hits`.
 
@@ -582,6 +593,7 @@ def answer_from(query, hits, on_token=None, stats=None):
     instruction channel. The system prompt states the same thing in words, because a
     delimiter the model has not been told about is just a string.
     """
+    model = _select_model(query)
     messages = [
         {"role": "system", "content": GROUNDING},
         {
@@ -598,7 +610,7 @@ def answer_from(query, hits, on_token=None, stats=None):
     # is listening.
     if on_token is None:
         resp = llm.chat.completions.create(
-            model=CHAT_MODEL, messages=messages,
+            model=model, messages=messages,
             max_tokens=CHAT_MAX_TOKENS,
             extra_body={"keep_alive": os.getenv("LLM_KEEP_ALIVE", "30m")},
         )
@@ -610,7 +622,7 @@ def answer_from(query, hits, on_token=None, stats=None):
         # without it every chunk carries usage=None and the stats dict stays empty, so
         # the MCP tool never appends the "[token usage: ...]" line the UI reads.
         for chunk in llm.chat.completions.create(
-            model=CHAT_MODEL, messages=messages, stream=True,
+            model=model, messages=messages, stream=True,
             max_tokens=CHAT_MAX_TOKENS,
             stream_options={"include_usage": True},
             extra_body={"keep_alive": os.getenv("LLM_KEEP_ALIVE", "30m")},
