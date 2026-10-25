@@ -648,6 +648,14 @@ Then point Grafana at Prometheus as a data source and build dashboards over
 `rag_retrieve_seconds`, `rag_generate_seconds`, `rag_tokens_total`, and
 `rag_cache_hits_total`.
 
+Or run the bundled stack:
+
+```bash
+docker compose --profile observability up -d
+# Prometheus: http://127.0.0.1:9090
+# Grafana:    http://127.0.0.1:3000  (admin / admin)
+```
+
 ## Gotchas
 
 - **Bind `0.0.0.0`.** `mcp.run()` defaults to `127.0.0.1`, unreachable from other containers.
