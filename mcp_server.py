@@ -224,6 +224,8 @@ async def answer_docs(query: str, ctx: Context) -> str:
     suffix = ""
     if stats.get("model"):
         suffix += f"\n\n[model: {stats.get('model')}]"
+    if stats.get("cached"):
+        suffix += "\n\n[cached: answer served from cache]"
     if stats.get("prompt_tokens") is not None:
         # Token usage now travels with the answer, so measurement happens inside the
         # harness instead of by hand-calling Ollama per generation.

@@ -646,6 +646,7 @@ def answer_from(query, hits, on_token=None, stats=None):
         if stats is not None:
             stats.clear()
             stats.update(cached_stats)
+            stats["cached"] = True
         return cached_text
 
     messages = [
