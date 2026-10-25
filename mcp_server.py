@@ -227,6 +227,8 @@ async def answer_docs(query: str, ctx: Context) -> str:
     if stats.get("cached"):
         suffix += "\n\n[cached: answer served from cache]"
         suffix += "\n\n[source: cache]"
+    elif "no document" in text.lower():
+        suffix += "\n\n[source: none (no matching documents)]"
     else:
         suffix += "\n\n[source: documents (RAG)]"
     if stats.get("prompt_tokens") is not None:
