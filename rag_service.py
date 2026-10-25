@@ -595,11 +595,20 @@ def answer_from(query, hits, on_token=None, stats=None):
         _capture_token_stats(resp, stats)
     else:
         parts = []
-        for chunk in llm.chat.completions.create(model=CHAT_MODEL, messages=messages, stream=True):
-            piece = chunk.choices[0].delta.content or ""
-            if piece:
-                parts.append(piece)
-                on_token(piece)
+        # include_usage asks Ollama to send its token counts on the final stream chunk;
+        # without it every chunk carries usage=None and the stats dict stays empty, so
+        # the MCP tool never appends the "[token usage: ...]" line the UI reads.
+        for chunk in llm.chat.completions.create(
+            model=CHAT_MODEL, messages=messages, stream=True,
+            stream_options={"include_usage": True},
+        ):
+            # The final chunk that carries `usage` has an empty choices list, so
+            # guard before reading the delta.
+            if chunk.choices:
+                piece = chunk.choices[0].delta.content or ""
+                if piece:
+                    parts.append(piece)
+                    on_token(piece)
             _capture_token_stats(chunk, stats)
         text = "".join(parts)
 
