@@ -424,6 +424,7 @@ $('bar').onsubmit = async (e) => {
       const s = document.createElement('div');
       s.className = 'src';
       const srcText = text.slice(cut + 2)
+        .replace(/\s*\[model:[^\]]*\]\s*$/, '')
         .replace(/\s*\[token usage:[^\]]*\]\s*$/, '')
         .replace(/\s*\[response time:[^\]]*\]\s*$/, '');
       s.textContent = srcText.replace(/\s*\n\s*/g, ' ');
@@ -437,6 +438,13 @@ $('bar').onsubmit = async (e) => {
       const s = document.createElement('div');
       s.className = 'src';
       s.textContent = 'token usage: prompt_tokens=' + tu[1] + ' completion_tokens=' + tu[2];
+      pending.appendChild(s);
+    }
+    const md = text.match(/\[model: ([^\]]+)\]/);
+    if (md) {
+      const s = document.createElement('div');
+      s.className = 'src';
+      s.textContent = 'model: ' + md[1].trim();
       pending.appendChild(s);
     }
     const rt = text.match(/\[response time: ([\d.]+)s\]/);

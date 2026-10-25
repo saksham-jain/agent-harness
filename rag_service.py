@@ -594,6 +594,8 @@ def answer_from(query, hits, on_token=None, stats=None):
     delimiter the model has not been told about is just a string.
     """
     model = _select_model(query)
+    if stats is not None:
+        stats["model"] = model
     messages = [
         {"role": "system", "content": GROUNDING},
         {
