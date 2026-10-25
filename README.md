@@ -53,7 +53,7 @@ so the files are the only copy.
 
 | Component | Detail |
 | --- | --- |
-| LLM | `qwen2.5:7b` (7.6B, Q4_K_M) via Ollama |
+| LLM | `qwen2.5:7b` (7.6B, Q4_K_M) via Ollama; optional `FAST_MODEL` (default `qwen2.5:1.5b`) used for short queries (≤ `FAST_MODEL_THRESHOLD` chars, default 80) |
 | Router | `qwen2.5:1.5b` — one binary call per message. Few-shot prompt, **0 false negatives** on the tuning set |
 | Embeddings | `nomic-embed-text` (137M, nomic-bert, 768-dim) |
 | Vector DB | Qdrant `1.19.1`, 768-dim Cosine, collection `rag_nomic_embed_text` |
@@ -269,6 +269,12 @@ through the real pipeline instead of by hand-calling Ollama per generation. `ans
 appends a `[response time: Xs]` line measured around the whole call. The web UI renders both
 lines as small source-style hints under the answer, so the counts are visible in the panel
 rather than only in logs.
+
+**Fast-model fallback.** `rag_service._select_model` chooses the generation model per query:
+queries no longer than `FAST_MODEL_THRESHOLD` characters (default 80) use `FAST_MODEL`
+(default `qwen2.5:1.5b`) when configured; longer queries keep `CHAT_MODEL` (`qwen2.5:7b`).
+The chosen model is appended to the answer as `[model: …]` and rendered in the UI. This trades
+quality for latency on short questions; the evals gate whether the trade is acceptable.
 
 ### Other inference options
 
