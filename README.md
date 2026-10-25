@@ -476,6 +476,40 @@ That is why the network hop is invisible — **~0.2 ms against a 37-second gener
 plus Qdrant plus containers is tight. A container that dies with `exit 137` was SIGKILLed,
 almost always by the OOM killer — check `docker compose ps -a` before assuming a code fault.
 
+## Speeding up responses
+
+Baseline on this machine: `qwen2.5:7b` generates at ~9 tok/s on Metal, so a 100-token
+answer takes ~11 s plus ~3 s prefill. The pieces below are already wired in; tune them
+through `.env` / compose env without code changes.
+
+### Already implemented
+
+| Mechanism | Env / default | Effect |
+| --- | --- | --- |
+| Fast-model fallback | `FAST_MODEL=qwen2.5:1.5b`, `FAST_MODEL_THRESHOLD=80` | Short queries (≤ 80 chars) use the 1.5B model (~4× faster); longer ones keep 7B. Chosen model is appended as `[model: …]` |
+| Answer cache | `ANSWER_CACHE_TTL=300`, `ANSWER_CACHE_SIZE=64` (0 disables) | Identical queries skip retrieval + generation entirely; token stats restored from cache |
+| Output cap | `CHAT_MAX_TOKENS=512` | Stops runaway generation |
+| Context trim | `RETRIEVE_K=4`, `MAX_CONTEXT_CHARS=12000` | Fewer/shorter passages → faster prefill |
+| Keep-alive | `LLM_KEEP_ALIVE=30m` | Avoids ~12 s model reloads between calls |
+| Streaming | (always on) | First token in ~3 s instead of waiting for the whole answer |
+
+### Not yet wired — biggest remaining wins
+
+| Change | How | Expected gain |
+| --- | --- | --- |
+| Disable the router | `ROUTER_MODEL=""` | ~2 s saved per query (routing accuracy drops; evals measure it) |
+| Smaller context window | `OLLAMA_NUM_CTX=2048` (Ollama env) | Faster prefill, lower memory |
+| Flash attention | `OLLAMA_FLASH_ATTENTION=1` (Ollama env) | ~10–30 % faster decode |
+| Quantized KV cache | `OLLAMA_KV_CACHE_TYPE=q8_0` (Ollama env) | Lower memory, modest speedup |
+| Smaller / more quantized model | `LLM_MODEL=qwen2.5:3b` or a Q3 variant | Large, at a quality cost |
+| Hosted inference | point `LLM_BASE_URL` at Groq / OpenRouter | 10–20× decode speed, costs local-first |
+
+### Measure before guessing
+
+`evals/run.py --fast` scores retrieval + routing with no generation; `--full` grades answers
+and citations. Any change to model, prompt, or retrieval knobs should be checked against the
+holdout before it is trusted.
+
 ## Run
 
 ```bash
