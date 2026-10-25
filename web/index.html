@@ -413,6 +413,7 @@ $('bar').onsubmit = async (e) => {
   if (tool.confirm && !confirm(tool.confirm)) return;
 
   const pending = say('Working…', 'bot thinking');
+  const started = performance.now();
   try {
     const args = tool.args ? { query: q } : {};
     const r = await rpc('tools/call', { name: tool.name, arguments: args });
@@ -437,6 +438,11 @@ $('bar').onsubmit = async (e) => {
       s.textContent = 'token usage: prompt_tokens=' + tu[1] + ' completion_tokens=' + tu[2];
       pending.appendChild(s);
     }
+    const elapsed = ((performance.now() - started) / 1000).toFixed(2);
+    const rt = document.createElement('div');
+    rt.className = 'src';
+    rt.textContent = 'response time: ' + elapsed + 's';
+    pending.appendChild(rt);
     log.scrollTop = log.scrollHeight;
   } catch (err) {
     pending.classList.remove('thinking');
