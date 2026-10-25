@@ -270,6 +270,10 @@ appends a `[response time: Xs]` line measured around the whole call. The web UI 
 lines as small source-style hints under the answer, so the counts are visible in the panel
 rather than only in logs.
 
+**Answer cache.** `rag_service` keeps an in-memory LRU cache of generated answers keyed by the
+normalized query (`ANSWER_CACHE_TTL` seconds, `ANSWER_CACHE_SIZE` entries; set TTL to 0 to
+disable). A cache hit skips retrieval and generation entirely and restores the token stats.
+
 **Fast-model fallback.** `rag_service._select_model` chooses the generation model per query:
 queries no longer than `FAST_MODEL_THRESHOLD` characters (default 80) use `FAST_MODEL`
 (default `qwen2.5:1.5b`) when configured; longer queries keep `CHAT_MODEL` (`qwen2.5:7b`).
