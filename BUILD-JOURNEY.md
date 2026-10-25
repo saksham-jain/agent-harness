@@ -363,6 +363,7 @@ hybrid-search limitation, not a broken pipeline, and it is the next thing to fix
 | Injection via uploaded files | Not built. Whatever lands in `docs/` enters prompts unescaped, and the grounding prompt is the only guardrail |
 | Tool choice | The 7B still declines `answer_docs` on its own — the router's decision is now enforced rather than advisory, which works but is a patch over a prompt that misstates what the model knows |
 | Per-tool scopes | **done** — `docs:write` gates `refresh_index`. It was a live gap before any upload existed: a read-only token could rebuild the index |
+| Token measurement | **in progress** — the harness now captures `usage` (`prompt_tokens` / `completion_tokens`) from the generation response and returns it with the answer as `[token usage: …]`; the web UI renders it. Context window for `qwen2.5:7b` is **32768** tokens |
 
 ### The exposure that outlived TLS
 

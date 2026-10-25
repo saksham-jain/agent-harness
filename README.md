@@ -265,7 +265,9 @@ counters (`prompt_eval_count`, `eval_count`) present in real generation response
 The harness now reads that usage back: `rag_service.answer_from` captures the OpenAI-style
 `usage` object from the generation response and `answer_docs` returns it with the answer as a
 trailing `[token usage: prompt_tokens=… completion_tokens=…]` line, so token measurement runs
-through the real pipeline instead of by hand-calling Ollama per generation.
+through the real pipeline instead of by hand-calling Ollama per generation. The web UI renders
+that line as a small source-style hint under the answer, so the count is visible in the panel
+rather than only in logs.
 
 ### Other inference options
 

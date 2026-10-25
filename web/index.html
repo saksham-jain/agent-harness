@@ -426,6 +426,16 @@ $('bar').onsubmit = async (e) => {
       s.textContent = text.slice(cut + 2).replace(/\s*\n\s*/g, ' ');
       pending.appendChild(s);
     }
+    // Token usage Ollama reported rides along in the answer text. The sources marker
+    // splits answer from sources, so look past it and render the count as its own hint
+    // rather than letting the trim swallow it.
+    const tu = text.match(/\[token usage: prompt_tokens=(\d+) completion_tokens=(\d+)\]/);
+    if (tu) {
+      const s = document.createElement('div');
+      s.className = 'src';
+      s.textContent = 'token usage: prompt_tokens=' + tu[1] + ' completion_tokens=' + tu[2];
+      pending.appendChild(s);
+    }
     log.scrollTop = log.scrollHeight;
   } catch (err) {
     pending.classList.remove('thinking');
