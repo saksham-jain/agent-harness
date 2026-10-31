@@ -280,7 +280,9 @@ rather than only in logs.
 
 **Answer cache.** `rag_service` keeps an in-memory LRU cache of generated answers keyed by the
 normalized query (`ANSWER_CACHE_TTL` seconds, `ANSWER_CACHE_SIZE` entries; set TTL to 0 to
-disable). A cache hit skips retrieval and generation entirely and restores the token stats.
+disable). The key includes the model and a prompt version, and only real answers are stored; a "not found" result is never cached. A cache hit skips retrieval and generation and restores the token stats.
+
+**Grounded refusals.** The grounding prompt asks the model to reply with the sentinel `NOT_FOUND` when the documents do not answer a question. `answer_from` turns that into a structured `answered=False` flag, and the answer's `[source: …]` line reads `none (documents do not cover this)`. Generation runs at `temperature=0`, so repeated questions get the same result.
 
 **Fast-model fallback.** `rag_service._select_model` chooses the generation model per query:
 queries no longer than `FAST_MODEL_THRESHOLD` characters (default 80) use `FAST_MODEL`
